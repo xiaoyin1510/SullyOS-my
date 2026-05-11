@@ -71,22 +71,9 @@ export default function CommerceCard({
             </div>
 
             {isPendingPay && (
-                <div className="p-2.5 bg-white/65 border-t border-white/75 grid gap-2">
-                    <div className="grid grid-cols-2 gap-2">
-                        <button
-                            type="button"
-                            onClick={() => onAction?.('mark_paid', card)}
-                            className="h-9 rounded-2xl bg-emerald-50 text-emerald-600 border border-emerald-100 text-xs font-black active:scale-95"
-                        >
-                            TA已付款
-                        </button>
-                        <button
-                            type="button"
-                            onClick={() => onAction?.('mark_rejected', card)}
-                            className="h-9 rounded-2xl bg-rose-50 text-rose-600 border border-rose-100 text-xs font-black active:scale-95"
-                        >
-                            TA拒绝支付
-                        </button>
+                <div className="p-2.5 bg-white/65 border-t border-white/75">
+                    <div className="h-9 rounded-2xl bg-white/80 border border-white text-slate-500 text-xs font-black flex items-center justify-center">
+                        等待TA在回复中选择支付或拒绝
                     </div>
                 </div>
             )}

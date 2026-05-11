@@ -29,7 +29,9 @@ import type { CommerceCardPayload, CommerceCardItem, CommerceCardKind } from '..
 
 
 type NuomiCommerceAction = {
-    kind?: 'char_purchase_to_user' | 'char_delivery_to_user';
+    kind?: 'char_purchase_to_user' | 'char_delivery_to_user' | 'delivery_payment_response' | 'waimai_response';
+    type?: string;
+    status?: 'paid' | 'rejected' | string;
     name?: string;
     productInfo?: string;
     itemName?: string;
@@ -2384,12 +2386,52 @@ export const useChatAI = ({
             aiContent = commerceParsed.cleanText;
             if (commerceParsed.actions.length > 0) {
                 for (const action of commerceParsed.actions.slice(0, 3)) {
-                    const kind: CommerceCardKind = action.kind === 'char_delivery_to_user' ? 'char_delivery_to_user' : 'char_purchase_to_user';
-                    const mode = kind === 'char_delivery_to_user' ? 'delivery' : 'shopping';
+                    const actionKind = String(action.kind || action.type || '').trim();
                     const name = String(action.name || action.productInfo || action.itemName || '').trim().slice(0, 60);
                     const total = Number(action.amount ?? action.price ?? 0);
-                    if (!name || !Number.isFinite(total) || total <= 0) continue;
                     const note = String(action.note || action.greeting || '').trim().slice(0, 240) || undefined;
+
+                    // 外卖代付回应：由角色在正常回复里选择 paid / rejected，系统弹出结果卡片。
+                    if (actionKind === 'delivery_payment_response' || actionKind === 'waimai_response') {
+                        const paid = String(action.status || '').toLowerCase() === 'paid';
+                        const rejected = String(action.status || '').toLowerCase() === 'rejected';
+                        if (!paid && !rejected) continue;
+                        const item: CommerceCardItem = {
+                            name: name || '外卖代付请求',
+                            qty: 1,
+                            price: Number.isFinite(total) && total > 0 ? total : 0,
+                            subtotal: Number.isFinite(total) && total > 0 ? total : 0,
+                            emoji: '🥡',
+                        };
+                        const card: CommerceCardPayload = {
+                            version: 2,
+                            id: `commerce-pay-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
+                            kind: paid ? 'delivery_paid' : 'delivery_rejected',
+                            title: paid ? `${char.name}已完成支付` : `${char.name}已拒绝支付`,
+                            mode: 'delivery',
+                            actorName: char.name,
+                            targetName: userProfile.name || '我',
+                            charName: char.name,
+                            userName: userProfile.name || '我',
+                            items: [item],
+                            total: item.subtotal,
+                            note,
+                            status: paid ? 'paid' : 'rejected',
+                            createdAt: Date.now(),
+                        };
+                        await DB.saveMessage({
+                            charId: char.id,
+                            role: 'assistant',
+                            type: 'commerce_card',
+                            content: commerceCardToContent(card),
+                            metadata: { source: 'nuomi-commerce-payment', commerceCard: card },
+                        } as any);
+                        continue;
+                    }
+
+                    const kind: CommerceCardKind = actionKind === 'char_delivery_to_user' ? 'char_delivery_to_user' : 'char_purchase_to_user';
+                    const mode = kind === 'char_delivery_to_user' ? 'delivery' : 'shopping';
+                    if (!name || !Number.isFinite(total) || total <= 0) continue;
                     const item: CommerceCardItem = {
                         name,
                         qty: 1,
