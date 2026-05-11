@@ -55,6 +55,77 @@ function extractNuomiCommerceActions(text: string): { cleanText: string; actions
     return { cleanText, actions };
 }
 
+
+function getCommerceCardFromMessage(message: any): CommerceCardPayload | undefined {
+    return message?.metadata?.commerceCard as CommerceCardPayload | undefined;
+}
+
+function findLatestPendingDeliveryRequest(messages: Message[]): CommerceCardPayload | undefined {
+    return [...(messages || [])]
+        .reverse()
+        .map(getCommerceCardFromMessage)
+        .find((card) => !!card && card.kind === 'delivery_request' && card.status === 'pending');
+}
+
+function detectDeliveryPaymentDecision(text: string): 'paid' | 'rejected' | undefined {
+    const source = String(text || '').replace(/\s+/g, ' ').trim();
+    if (!source) return undefined;
+    if (/(拒绝支付|拒绝付款|不支付|不付款|不想支付|不想付款|不付了|不付|别付|算了|没钱|暂不支付|暂不付款|rejected|declined|decline|refuse|no pay)/i.test(source)) {
+        return 'rejected';
+    }
+    if (/(已完成支付|完成支付|已支付|已付款|付过了|付了|我付|付款|支付|转账|买单|请客|paid|transfer)/i.test(source)) {
+        return 'paid';
+    }
+    return undefined;
+}
+
+function stripDeliveryPaymentNoise(text: string): string {
+    return String(text || '')
+        .replace(/\[系统[:：]\s*[^\]]*?(?:转账|支付|付款)[^\]]*?\]/g, '')
+        .replace(/^.*?(?:已完成支付|完成支付|已支付|已付款).*$/gim, '')
+        .replace(/^\s*[-•]\s*[^\n]*(?:数量|单价|小计|合计)[^\n]*$/gim, '')
+        .replace(/^\s*合计\s*[:：]?\s*¥?\d+(?:\.\d+)?\s*$/gim, '')
+        .replace(/\n{3,}/g, '\n\n')
+        .trim();
+}
+
+function createDeliveryPaymentResultCard(
+    pending: CommerceCardPayload | undefined,
+    paid: boolean,
+    charName: string,
+    userName: string,
+    note?: string,
+    fallbackName?: string,
+    fallbackAmount?: number,
+): CommerceCardPayload {
+    const fallbackTotal = Number.isFinite(fallbackAmount || 0) && (fallbackAmount || 0) > 0 ? Number(fallbackAmount) : 0;
+    const fallbackItems: CommerceCardItem[] = [{
+        name: fallbackName || '外卖代付请求',
+        qty: 1,
+        price: fallbackTotal,
+        subtotal: fallbackTotal,
+        emoji: '🥡',
+    }];
+    const items = (pending?.items && pending.items.length > 0) ? pending.items : fallbackItems;
+    const total = pending?.total ?? items.reduce((sum, item) => sum + (Number(item.subtotal) || Number(item.price) * Number(item.qty || 1) || 0), 0);
+    return {
+        version: 2,
+        id: `commerce-pay-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
+        kind: paid ? 'delivery_paid' : 'delivery_rejected',
+        title: paid ? `${charName}已完成支付` : `${charName}已拒绝支付`,
+        mode: 'delivery',
+        actorName: charName,
+        targetName: userName || '我',
+        charName,
+        userName: userName || '我',
+        items,
+        total,
+        note: note || pending?.note,
+        status: paid ? 'paid' : 'rejected',
+        createdAt: Date.now(),
+    };
+}
+
 function formatCommerceAmount(value: number) {
     return Number(value || 0).toFixed(2).replace(/\.00$/, '');
 }
@@ -2289,6 +2360,33 @@ export const useChatAI = ({
             aiContent = aiContent.replace(/\[\[XHS_POST:.*?\]\]/gs, '').trim();
 
             // 6. Parse Actions (Poke, Transfer, Schedule, Music, etc.)
+            // 外卖代付时，有些模型会沿用原版“转账”动作。这里先拦截，改成外卖支付结果卡片，避免出现转账气泡。
+            const latestPendingDeliveryRequest = findLatestPendingDeliveryRequest(contextMsgs);
+            let commercePaymentHandled = false;
+            if (latestPendingDeliveryRequest) {
+                const transferMatchForDelivery = aiContent.match(/\[\[ACTION:TRANSFER:(\d+(?:\.\d+)?)\]\]/);
+                if (transferMatchForDelivery) {
+                    const paidCard = createDeliveryPaymentResultCard(
+                        latestPendingDeliveryRequest,
+                        true,
+                        char.name,
+                        userProfile.name || '我',
+                        'TA选择支付这笔外卖代付请求。',
+                        undefined,
+                        Number(transferMatchForDelivery[1]),
+                    );
+                    await DB.saveMessage({
+                        charId: char.id,
+                        role: 'assistant',
+                        type: 'commerce_card',
+                        content: commerceCardToContent(paidCard),
+                        metadata: { source: 'nuomi-commerce-payment-transfer-guard', commerceCard: paidCard },
+                    } as any);
+                    setMessages(await DB.getRecentMessagesByCharId(char.id, 200));
+                    commercePaymentHandled = true;
+                    aiContent = stripDeliveryPaymentNoise(aiContent.replace(transferMatchForDelivery[0], '').trim());
+                }
+            }
             aiContent = await ChatParser.parseAndExecuteActions(aiContent, char.id, char.name, addToast, {
                 getListeningSnapshot: () => {
                     if (!music.current) return null;
@@ -2396,29 +2494,16 @@ export const useChatAI = ({
                         const paid = String(action.status || '').toLowerCase() === 'paid';
                         const rejected = String(action.status || '').toLowerCase() === 'rejected';
                         if (!paid && !rejected) continue;
-                        const item: CommerceCardItem = {
-                            name: name || '外卖代付请求',
-                            qty: 1,
-                            price: Number.isFinite(total) && total > 0 ? total : 0,
-                            subtotal: Number.isFinite(total) && total > 0 ? total : 0,
-                            emoji: '🥡',
-                        };
-                        const card: CommerceCardPayload = {
-                            version: 2,
-                            id: `commerce-pay-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
-                            kind: paid ? 'delivery_paid' : 'delivery_rejected',
-                            title: paid ? `${char.name}已完成支付` : `${char.name}已拒绝支付`,
-                            mode: 'delivery',
-                            actorName: char.name,
-                            targetName: userProfile.name || '我',
-                            charName: char.name,
-                            userName: userProfile.name || '我',
-                            items: [item],
-                            total: item.subtotal,
+                        const pending = latestPendingDeliveryRequest || findLatestPendingDeliveryRequest(contextMsgs);
+                        const card = createDeliveryPaymentResultCard(
+                            pending,
+                            paid,
+                            char.name,
+                            userProfile.name || '我',
                             note,
-                            status: paid ? 'paid' : 'rejected',
-                            createdAt: Date.now(),
-                        };
+                            name,
+                            Number.isFinite(total) ? total : 0,
+                        );
                         await DB.saveMessage({
                             charId: char.id,
                             role: 'assistant',
@@ -2426,6 +2511,7 @@ export const useChatAI = ({
                             content: commerceCardToContent(card),
                             metadata: { source: 'nuomi-commerce-payment', commerceCard: card },
                         } as any);
+                        commercePaymentHandled = true;
                         continue;
                     }
 
@@ -2465,6 +2551,31 @@ export const useChatAI = ({
                     } as any);
                 }
                 addToast('已弹出TA主动购物/外卖卡片', 'success');
+            }
+
+            // 如果模型没有按要求输出内部标签，而是自然写了“已付款/转账/拒绝支付”，也自动转成支付结果卡片。
+            if (!commercePaymentHandled) {
+                const pending = latestPendingDeliveryRequest || findLatestPendingDeliveryRequest(contextMsgs);
+                const decision = pending ? detectDeliveryPaymentDecision(aiContent) : undefined;
+                if (pending && decision) {
+                    const card = createDeliveryPaymentResultCard(
+                        pending,
+                        decision === 'paid',
+                        char.name,
+                        userProfile.name || '我',
+                        decision === 'paid' ? 'TA选择支付这笔外卖代付请求。' : 'TA选择拒绝这笔外卖代付请求。',
+                    );
+                    await DB.saveMessage({
+                        charId: char.id,
+                        role: 'assistant',
+                        type: 'commerce_card',
+                        content: commerceCardToContent(card),
+                        metadata: { source: 'nuomi-commerce-payment-natural', commerceCard: card },
+                    } as any);
+                    setMessages(await DB.getRecentMessagesByCharId(char.id, 200));
+                    aiContent = stripDeliveryPaymentNoise(aiContent);
+                    commercePaymentHandled = true;
+                }
             }
 
             // 6.4 思考过程展示（仅 char.showThinkingChain 开启时落库）。
