@@ -2098,30 +2098,6 @@ export const OSProvider: React.FC<{ children: React.ReactNode }> = ({ children }
               return obj;
           };
 
-          // Nuomi Commerce add-on localStorage backup. These keys hold shopping/delivery
-          // product libraries, custom categories, and AI restock API settings. In text-only mode
-          // uploaded local images are stripped; in full mode they are kept inside data.json.
-          const collectCommerceData = (): Record<string, string> | undefined => {
-              if (mode === 'media_only') return undefined;
-              const out: Record<string, string> = {};
-              for (let i = 0; i < localStorage.length; i++) {
-                  const k = localStorage.key(i);
-                  if (!k || !k.startsWith('nuomi_commerce_')) continue;
-                  const raw = localStorage.getItem(k);
-                  if (raw == null) continue;
-                  if (mode === 'text_only') {
-                      try {
-                          out[k] = JSON.stringify(stripBase64(JSON.parse(raw)));
-                      } catch {
-                          out[k] = raw;
-                      }
-                  } else {
-                      out[k] = raw;
-                  }
-              }
-              return Object.keys(out).length > 0 ? out : undefined;
-          };
-
           // Extract Images to ZIP (Recursive) - Used for Media/Theme Mode
           const processObject = (obj: any): any => {
               if (obj === null || typeof obj !== 'object') return obj;
@@ -2308,7 +2284,6 @@ export const OSProvider: React.FC<{ children: React.ReactNode }> = ({ children }
                   }
                   return Object.keys(flags).length > 0 ? flags : undefined;
               })() : undefined,
-              commerceData: collectCommerceData(),
           };
 
           const totalSteps = storesToProcess.length + 3;
@@ -2787,15 +2762,6 @@ export const OSProvider: React.FC<{ children: React.ReactNode }> = ({ children }
               }
           }
 
-          // Restore Nuomi Commerce add-on localStorage data.
-          // 原版 SullyOS 不认识 commerceData 时会直接忽略；安装插件后才会恢复商品库/分类/API 设置。
-          if (data.commerceData && typeof data.commerceData === 'object') {
-              for (const [key, val] of Object.entries(data.commerceData)) {
-                  if (typeof val === 'string' && key.startsWith('nuomi_commerce_')) {
-                      localStorage.setItem(key, val);
-                  }
-              }
-          }
           
           if (data.socialAppData) {
               if (data.socialAppData.charHandles) localStorage.setItem('spark_char_handles', JSON.stringify(data.socialAppData.charHandles));

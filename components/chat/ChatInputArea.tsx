@@ -568,15 +568,6 @@ const ChatInputArea: React.FC<ChatInputAreaProps> = ({
                               <span className="text-xs font-bold">购物中心</span>
                             </button>
 
-                            <button
-                              onClick={() => onPanelAction('nuomi-delivery')}
-                              className={`flex flex-col items-center gap-2 active:scale-95 transition-transform ${isDiscordStyle ? 'text-slate-200' : 'text-slate-600'}`}
-                            >
-                              <div className={`w-14 h-14 rounded-2xl flex items-center justify-center shadow-sm border ${isDiscordStyle ? 'bg-slate-800 text-orange-300 border-orange-400/20' : 'bg-orange-50 text-orange-500 border-orange-100'}`}>
-                                  <ForkKnife className="w-6 h-6" weight="bold" />
-                              </div>
-                              <span className="text-xs font-bold">外卖</span>
-                            </button>
                           </div>
 
                           {/* 翻页指示器 */}

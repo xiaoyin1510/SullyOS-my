@@ -1672,9 +1672,6 @@ export interface FullBackupData {
     lastActiveCharId?: string;
     eventNotifFlags?: Record<string, string>;  // sullyos_* 事件通知标记
 
-    // Nuomi Commerce add-on（购物中心 / 外卖）
-    // 存放插件自己的 localStorage 数据：商品库、分类、AI 补货 API 设置等。
-    commerceData?: Record<string, string>;
 }
 
 // --- CLOUD BACKUP TYPES ---

@@ -173,6 +173,7 @@ export default function NuomiCommerceMiniApp({ open, initialMode = 'shopping', o
     const [categoryFor, setCategoryFor] = useState<CommerceMode | null>(null);
     const [categoryDraft, setCategoryDraft] = useState('');
     const [apiOpen, setApiOpen] = useState(false);
+    const [dataOpen, setDataOpen] = useState(false);
     const [ai, setAi] = useState<AiSettings>(() => readAi(apiConfig));
     const [loadingAi, setLoadingAi] = useState(false);
     const [directShop, setDirectShop] = useState<DirectForm>(blankDirect);
@@ -252,7 +253,7 @@ export default function NuomiCommerceMiniApp({ open, initialMode = 'shopping', o
         const price = Number(form.price) || 0; if (!form.name.trim() || price <= 0) return setToast('请填写名称和价格');
         const targetCategory = form.category.trim() || (formFor === 'delivery' ? deliveryCategory : category);
         if (!targetCategory || targetCategory === '全部') return setToast('请先选择或新增一个分类');
-        const product: Product = { id: id(formFor === 'delivery' ? 'manual-delivery' : 'manual-product'), name: form.name.trim(), category: targetCategory, price, description: formFor === 'delivery' ? undefined : (form.description.trim() || '用户手动上传的商品。'), emoji: formFor === 'delivery' ? '🥡' : (form.emoji.trim() || '🎁'), image: formFor === 'delivery' ? undefined : (form.image.trim() || undefined), source: 'manual' };
+        const product: Product = { id: id(formFor === 'delivery' ? 'manual-delivery' : 'manual-product'), name: form.name.trim(), category: targetCategory, price, description: formFor === 'delivery' ? undefined : (form.description.trim() || '用户手动上传的商品。'), emoji: form.emoji.trim() || (formFor === 'delivery' ? '🥡' : '🎁'), image: formFor === 'delivery' ? undefined : (form.image.trim() || undefined), source: 'manual' };
         if (formFor === 'delivery') { setDelivery(prev => [product, ...prev]); setDeliveryCategory(targetCategory); } else { setProducts(prev => [product, ...prev]); setCategory(targetCategory); setSelectedId(product.id); }
         setFormFor(null); setForm(blankProductForm); setToast(`已保存到“${targetCategory}”分类`);
     };
@@ -270,6 +271,56 @@ export default function NuomiCommerceMiniApp({ open, initialMode = 'shopping', o
         setToast('分类已删除');
     };
     const doAi = async () => { setLoadingAi(true); try { const items = await aiRestock(ai, char, recentMessages, products, cats); setProducts(prev => [...prev.filter(p => p.source !== 'ai'), ...items]); setCategory('全部'); setToast('AI 已根据人设和上下文补货'); } catch (e: any) { setToast(e?.message || 'AI补货失败'); } finally { setLoadingAi(false); } };
+    const refreshLocalData = () => {
+        setProducts(read('shopping', char?.id) || defaultProducts);
+        setDelivery(read('delivery', char?.id) || defaultDelivery);
+        setShoppingCustomCats(readCats('shopping', char?.id));
+        setDeliveryCustomCats(readCats('delivery', char?.id));
+        setAi(readAi(apiConfig));
+        setCart([]);
+        setDeliveryCart([]);
+        setChecked({});
+        setCheckedDelivery({});
+    };
+    const exportCommerceData = () => {
+        const data: Record<string, string> = {};
+        for (let i = 0; i < localStorage.length; i++) {
+            const k = localStorage.key(i);
+            if (!k || !k.startsWith('nuomi_commerce_')) continue;
+            const raw = localStorage.getItem(k);
+            if (raw != null) data[k] = raw;
+        }
+        const payload = { type: 'nuomi-commerce-data', version: STORAGE_VERSION, exportedAt: new Date().toISOString(), charId: char?.id || null, charName: char?.name || '', data };
+        const blob = new Blob([JSON.stringify(payload, null, 2)], { type: 'application/json;charset=utf-8' });
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement('a');
+        a.href = url;
+        a.download = `nuomi-commerce-${char?.name || 'data'}-${new Date().toISOString().slice(0, 10)}.json`;
+        document.body.appendChild(a);
+        a.click();
+        a.remove();
+        URL.revokeObjectURL(url);
+        setToast('购物中心数据已导出到本地，包含 API Key 和全部预设，请妥善保存');
+    };
+    const importCommerceData = async (file: File) => {
+        try {
+            const payload = JSON.parse(await file.text());
+            const data = payload?.data && typeof payload.data === 'object' ? payload.data : payload;
+            let count = 0;
+            for (const [k, v] of Object.entries(data)) {
+                if (typeof k === 'string' && k.startsWith('nuomi_commerce_') && typeof v === 'string') {
+                    localStorage.setItem(k, v);
+                    count++;
+                }
+            }
+            if (!count) throw new Error('没有识别到购物中心数据');
+            refreshLocalData();
+            setDataOpen(false);
+            setToast(`已导入 ${count} 项购物中心数据`);
+        } catch (e: any) {
+            setToast(e?.message || '导入失败，请确认文件正确');
+        }
+    };
 
     if (!open) return null;
     const productList = tab === 'shopping' ? visible : dvisible;
@@ -281,10 +332,10 @@ export default function NuomiCommerceMiniApp({ open, initialMode = 'shopping', o
 
     return <div className="fixed inset-0 z-[70] bg-slate-900/35 backdrop-blur-sm flex items-end sm:items-center justify-center p-0 sm:p-3" onMouseDown={onClose}>
         <section className="w-full sm:max-w-[980px] h-[100dvh] sm:h-[800px] sm:max-h-[92vh] rounded-none sm:rounded-[34px] bg-[#f8fafc] border border-white/70 shadow-2xl overflow-hidden flex flex-col" onMouseDown={e => e.stopPropagation()}>
-            <header className="px-4 py-3 bg-white/95 border-b border-slate-100 flex items-center justify-between gap-3 shrink-0 relative z-10"><div className="flex items-center gap-2 min-w-0"><div className="w-10 h-10 rounded-2xl bg-gradient-to-br from-pink-100 to-orange-100 text-pink-500 flex items-center justify-center shadow-sm">{tab === 'shopping' ? <Storefront className="w-5 h-5" weight="fill" /> : <BowlFood className="w-5 h-5" weight="fill" />}</div><div><h2 className="text-base font-black text-slate-900">{tab === 'shopping' ? '购物中心' : '外卖'}</h2></div></div><div className="flex items-center gap-2"><div className="p-1 rounded-2xl bg-slate-100 flex gap-1"><button onClick={() => setTab('shopping')} className={`h-8 px-3 rounded-xl text-xs font-black ${tab === 'shopping' ? 'bg-white text-pink-500 shadow-sm' : 'text-slate-400'}`}>购物</button><button onClick={() => setTab('delivery')} className={`h-8 px-3 rounded-xl text-xs font-black ${tab === 'delivery' ? 'bg-white text-orange-500 shadow-sm' : 'text-slate-400'}`}>外卖</button></div><button onClick={onClose} className="w-9 h-9 rounded-full bg-slate-100 text-slate-500 flex items-center justify-center"><X className="w-5 h-5" /></button></div></header>
+            <header className="px-4 py-3 bg-white/95 border-b border-slate-100 flex items-center justify-between gap-3 shrink-0 relative z-10"><div className="flex items-center gap-2 min-w-0"><div className="w-10 h-10 rounded-2xl bg-gradient-to-br from-pink-100 to-orange-100 text-pink-500 flex items-center justify-center shadow-sm">{tab === 'shopping' ? <Storefront className="w-5 h-5" weight="fill" /> : <BowlFood className="w-5 h-5" weight="fill" />}</div><div><h2 className="text-base font-black text-slate-900">购物中心</h2></div></div><div className="flex items-center gap-2"><div className="p-1 rounded-2xl bg-slate-100 flex gap-1"><button onClick={() => setTab('shopping')} className={`h-8 px-3 rounded-xl text-xs font-black ${tab === 'shopping' ? 'bg-white text-pink-500 shadow-sm' : 'text-slate-400'}`}>购物</button><button onClick={() => setTab('delivery')} className={`h-8 px-3 rounded-xl text-xs font-black ${tab === 'delivery' ? 'bg-white text-orange-500 shadow-sm' : 'text-slate-400'}`}>外卖</button></div><button onClick={onClose} className="w-9 h-9 rounded-full bg-slate-100 text-slate-500 flex items-center justify-center"><X className="w-5 h-5" /></button></div></header>
             {toast && <div className="mx-4 mt-3 rounded-2xl bg-slate-900 text-white px-3 py-2 text-xs font-bold shrink-0">{toast}</div>}
             <div className="p-3 sm:p-4 flex-1 min-h-0 overflow-y-auto block lg:grid lg:grid-cols-[1fr_310px] lg:gap-4 space-y-4 lg:space-y-0 overscroll-contain">
-                <main className="flex flex-col gap-3 overflow-visible"><div className="flex flex-wrap sm:flex-nowrap gap-2 overflow-visible sm:overflow-x-auto pb-1 shrink-0">{activeCats.map(c => <button key={c} onClick={() => setActiveCat(c)} className={`h-8 px-3 rounded-full text-xs font-black whitespace-nowrap border ${activeCat === c ? 'bg-slate-900 text-white border-slate-900' : 'bg-white/80 text-slate-500 border-slate-100'}`}>{c}</button>)}<button onClick={() => openCategorySheet(tab)} className="h-8 px-3 rounded-full text-xs font-black whitespace-nowrap bg-white text-pink-500 border border-pink-100">＋分类</button>{tab === 'shopping' && <button onClick={() => setApiOpen(true)} className="h-8 px-3 rounded-full text-xs font-black whitespace-nowrap bg-white text-slate-500 border border-slate-100">⚙ API</button>}{tab === 'shopping' && <button onClick={doAi} disabled={loadingAi} className="h-8 px-3 rounded-full text-xs font-black whitespace-nowrap bg-pink-50 text-pink-500 border border-pink-100 flex items-center gap-1">{loadingAi ? <ArrowsClockwise className="w-3.5 h-3.5 animate-spin" /> : <Sparkle className="w-3.5 h-3.5" weight="fill" />}AI补货</button>}<button onClick={() => setManage(v => !v)} className="h-8 px-3 rounded-full text-xs font-black whitespace-nowrap bg-white text-slate-500 border border-slate-100">{manage ? '完成管理' : '管理'}</button></div>
+                <main className="flex flex-col gap-3 overflow-visible"><div className="flex flex-wrap sm:flex-nowrap gap-2 overflow-visible sm:overflow-x-auto pb-1 shrink-0">{activeCats.map(c => <button key={c} onClick={() => setActiveCat(c)} className={`h-8 px-3 rounded-full text-xs font-black whitespace-nowrap border ${activeCat === c ? 'bg-slate-900 text-white border-slate-900' : 'bg-white/80 text-slate-500 border-slate-100'}`}>{c}</button>)}<button onClick={() => openCategorySheet(tab)} className="h-8 px-3 rounded-full text-xs font-black whitespace-nowrap bg-white text-pink-500 border border-pink-100">＋分类</button>{tab === 'shopping' && <button onClick={() => setApiOpen(true)} className="h-8 px-3 rounded-full text-xs font-black whitespace-nowrap bg-white text-slate-500 border border-slate-100">⚙ API</button>}{tab === 'shopping' && <button onClick={() => setDataOpen(true)} className="h-8 px-3 rounded-full text-xs font-black whitespace-nowrap bg-white text-slate-500 border border-slate-100">数据</button>}{tab === 'shopping' && <button onClick={doAi} disabled={loadingAi} className="h-8 px-3 rounded-full text-xs font-black whitespace-nowrap bg-pink-50 text-pink-500 border border-pink-100 flex items-center gap-1">{loadingAi ? <ArrowsClockwise className="w-3.5 h-3.5 animate-spin" /> : <Sparkle className="w-3.5 h-3.5" weight="fill" />}AI补货</button>}<button onClick={() => setManage(v => !v)} className="h-8 px-3 rounded-full text-xs font-black whitespace-nowrap bg-white text-slate-500 border border-slate-100">{manage ? '完成管理' : '管理'}</button></div>
                     {manage && <div className="flex flex-wrap sm:flex-nowrap gap-2 overflow-visible sm:overflow-x-auto pb-1"><button onClick={() => remove(tab, Object.keys(activeChecked).filter(k => activeChecked[k]))} className="h-8 px-3 rounded-full bg-rose-50 text-rose-500 border border-rose-100 text-xs font-black whitespace-nowrap">删除选中</button><button onClick={() => removeCat(tab, activeCat)} className="h-8 px-3 rounded-full bg-rose-50 text-rose-500 border border-rose-100 text-xs font-black whitespace-nowrap">删除当前分类</button></div>}
                     <div className="grid grid-cols-3 sm:grid-cols-2 lg:grid-cols-3 gap-2 sm:gap-3 overflow-visible content-start pb-3">{activeCat !== '全部' && <AddProductCard mode={tab} category={activeCat} onAdd={() => startManualAdd(tab)} />}{productList.map(p => <ProductCard key={p.id} mode={tab} product={p} manage={manage} checked={!!activeChecked[p.id]} onCheck={() => setActiveChecked(prev => ({ ...prev, [p.id]: !prev[p.id] }))} selected={tab === 'shopping' && selected?.id === p.id} onPick={() => { if (tab === 'shopping') { setSelectedId(p.id); } }} onAdd={() => tab === 'shopping' ? addLine(setCart, p) : addLine(setDeliveryCart, p)} onDelete={() => remove(tab, [p.id])} />)}</div>
                 </main>
@@ -296,6 +347,26 @@ export default function NuomiCommerceMiniApp({ open, initialMode = 'shopping', o
         {formFor && <ProductFormSheet mode={formFor} form={form} setForm={setForm} onClose={() => setFormFor(null)} onSave={addManual} />}
         {categoryFor && <CategorySheet mode={categoryFor} value={categoryDraft} setValue={setCategoryDraft} onClose={() => setCategoryFor(null)} onSave={saveCategory} />}
         {apiOpen && <ApiSheet ai={ai} setAi={setAi} onClose={() => setApiOpen(false)} />}
+        {dataOpen && <DataSheet onClose={() => setDataOpen(false)} onExport={exportCommerceData} onImport={importCommerceData} />}
+    </div>;
+}
+
+
+function DataSheet({ onClose, onExport, onImport }: { onClose: () => void; onExport: () => void; onImport: (file: File) => void }) {
+    const [fileName, setFileName] = useState('');
+    return <div className="fixed inset-0 z-[80] bg-slate-900/45 flex items-end sm:items-center justify-center p-0 sm:p-4" onMouseDown={onClose}>
+        <div className="w-full sm:max-w-md rounded-t-[30px] sm:rounded-[30px] bg-white p-4 shadow-2xl" onMouseDown={e => e.stopPropagation()}>
+            <div className="flex justify-between items-center mb-3"><h3 className="font-black text-slate-900">购物中心数据管理</h3><button onClick={onClose} className="w-9 h-9 rounded-full bg-slate-100 text-slate-500 flex items-center justify-center"><X className="w-5 h-5" /></button></div>
+            <div className="space-y-3">
+                <div className="rounded-2xl bg-amber-50 border border-amber-100 p-3 text-[12px] leading-relaxed text-amber-700 font-bold">导出文件只会下载到你的本地设备；内容包含购物/外卖商品、分类、AI 补货设置、API Key 和全部 API 预设。请不要把这个文件上传到公开网络。</div>
+                <button type="button" onClick={onExport} className="w-full h-11 rounded-2xl bg-slate-900 text-white text-sm font-black">导出购物/外卖数据</button>
+                <label className="block">
+                    <span className="mb-1.5 block text-[12px] font-black text-slate-500">导入购物/外卖数据</span>
+                    <input type="file" accept="application/json,.json" className="block w-full text-xs text-slate-500 file:mr-3 file:h-10 file:rounded-2xl file:border-0 file:bg-pink-50 file:px-4 file:text-xs file:font-black file:text-pink-500" onChange={e => { const file = e.target.files?.[0]; if (!file) return; setFileName(file.name); onImport(file); }} />
+                </label>
+                {fileName && <div className="text-[11px] text-slate-400">已选择：{fileName}</div>}
+            </div>
+        </div>
     </div>;
 }
 
@@ -314,7 +385,7 @@ function DirectBox({ mode, form, setForm, onSend }: { mode: CommerceMode; form: 
 }
 function ProductFormSheet({ mode, form, setForm, onClose, onSave }: { mode: CommerceMode; form: ProductFormState; setForm: React.Dispatch<React.SetStateAction<ProductFormState>>; onClose: () => void; onSave: () => void }) {
     const delivery = mode === 'delivery';
-    return <div className="fixed inset-0 z-[80] bg-slate-900/45 flex items-end sm:items-center justify-center p-0 sm:p-4" onMouseDown={onClose}><div className="w-full sm:max-w-md max-h-[90dvh] overflow-y-auto rounded-t-[30px] sm:rounded-[30px] bg-white p-4 shadow-2xl" onMouseDown={e => e.stopPropagation()}><div className="flex justify-between items-center mb-3"><h3 className="font-black text-slate-900">手动上传{delivery ? '外卖' : '商品'}到“{form.category || '未选择'}”</h3><button onClick={onClose} className="w-9 h-9 rounded-full bg-slate-100 text-slate-500 flex items-center justify-center"><X className="w-5 h-5" /></button></div><div className="space-y-3"><Field label="名称"><input value={form.name} onChange={e => setForm(f => ({ ...f, name: e.target.value }))} className={inputClass} /></Field><Field label="价格"><input value={form.price} onChange={e => setForm(f => ({ ...f, price: e.target.value }))} type="number" className={inputClass} /></Field>{!delivery && <><Field label="详情页"><textarea value={form.description} onChange={e => setForm(f => ({ ...f, description: e.target.value }))} className={areaClass} /></Field><div className="grid grid-cols-2 gap-2"><Field label="Emoji"><input value={form.emoji} onChange={e => setForm(f => ({ ...f, emoji: e.target.value }))} className={inputClass} /></Field><Field label="图片URL"><input value={form.image} onChange={e => setForm(f => ({ ...f, image: e.target.value }))} className={inputClass} /></Field></div><Field label="上传本地图片" hint="可选，会保存到浏览器本地。"><input type="file" accept="image/*" className="text-xs" onChange={e => { const file = e.target.files?.[0]; if (!file) return; const r = new FileReader(); r.onload = () => setForm(f => ({ ...f, image: String(r.result || '') })); r.readAsDataURL(file); }} /></Field></>}<button onClick={onSave} className="w-full h-11 rounded-2xl bg-slate-900 text-white text-sm font-black">保存到当前分类</button></div></div></div>;
+    return <div className="fixed inset-0 z-[80] bg-slate-900/45 flex items-end sm:items-center justify-center p-0 sm:p-4" onMouseDown={onClose}><div className="w-full sm:max-w-md max-h-[90dvh] overflow-y-auto rounded-t-[30px] sm:rounded-[30px] bg-white p-4 shadow-2xl" onMouseDown={e => e.stopPropagation()}><div className="flex justify-between items-center mb-3"><h3 className="font-black text-slate-900">手动上传{delivery ? '外卖' : '商品'}到“{form.category || '未选择'}”</h3><button onClick={onClose} className="w-9 h-9 rounded-full bg-slate-100 text-slate-500 flex items-center justify-center"><X className="w-5 h-5" /></button></div><div className="space-y-3"><Field label="名称"><input value={form.name} onChange={e => setForm(f => ({ ...f, name: e.target.value }))} className={inputClass} /></Field><Field label="价格"><input value={form.price} onChange={e => setForm(f => ({ ...f, price: e.target.value }))} type="number" className={inputClass} /></Field>{delivery && <Field label="Emoji（商品主图）"><input value={form.emoji} onChange={e => setForm(f => ({ ...f, emoji: e.target.value }))} className={inputClass} placeholder="例如：🍔" /></Field>}{!delivery && <><Field label="详情页"><textarea value={form.description} onChange={e => setForm(f => ({ ...f, description: e.target.value }))} className={areaClass} /></Field><div className="grid grid-cols-2 gap-2"><Field label="Emoji"><input value={form.emoji} onChange={e => setForm(f => ({ ...f, emoji: e.target.value }))} className={inputClass} /></Field><Field label="图片URL"><input value={form.image} onChange={e => setForm(f => ({ ...f, image: e.target.value }))} className={inputClass} /></Field></div><Field label="上传本地图片" hint="可选，会保存到浏览器本地。"><input type="file" accept="image/*" className="text-xs" onChange={e => { const file = e.target.files?.[0]; if (!file) return; const r = new FileReader(); r.onload = () => setForm(f => ({ ...f, image: String(r.result || '') })); r.readAsDataURL(file); }} /></Field></>}<button onClick={onSave} className="w-full h-11 rounded-2xl bg-slate-900 text-white text-sm font-black">保存到当前分类</button></div></div></div>;
 }
 function ApiSheet({ ai, setAi, onClose }: { ai: AiSettings; setAi: React.Dispatch<React.SetStateAction<AiSettings>>; onClose: () => void }) {
     const [draft, setDraft] = useState<AiSettings>(ai);
