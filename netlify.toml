@@ -1,0 +1,47 @@
+[build]
+  functions = "netlify/functions"
+  publish = "dist"
+
+[functions]
+  node_bundler = "esbuild"
+
+[[redirects]]
+  from = "/api/v1/init-tenant"
+  to = "/.netlify/functions/init-tenant"
+  status = 200
+
+[[redirects]]
+  from = "/api/v1/get-user-key"
+  to = "/.netlify/functions/get-user-key"
+  status = 200
+
+[[redirects]]
+  from = "/api/v1/schedule-message"
+  to = "/.netlify/functions/schedule-message"
+  status = 200
+
+[[redirects]]
+  from = "/api/v1/update-message"
+  to = "/.netlify/functions/update-message"
+  status = 200
+
+[[redirects]]
+  from = "/api/v1/cancel-message"
+  to = "/.netlify/functions/cancel-message"
+  status = 200
+
+[[redirects]]
+  from = "/api/v1/messages"
+  to = "/.netlify/functions/messages"
+  status = 200
+
+[[redirects]]
+  from = "/api/v1/send-notifications"
+  to = "/.netlify/functions/send-notifications"
+  status = 200
+
+[[headers]]
+  for = "/assets/*"
+
+  [headers.values]
+    Service-Worker-Allowed = "/"

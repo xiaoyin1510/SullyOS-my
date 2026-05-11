@@ -1,0 +1,192 @@
+
+
+
+<!DOCTYPE html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=0, viewport-fit=cover, interactive-widget=resizes-content" />
+    <title>SullyOS</title>
+    
+    <!-- PWA Settings -->
+    <link rel="manifest" href="./manifest.webmanifest" />
+    <meta name="theme-color" content="#0f1115" />
+    <meta name="mobile-web-app-capable" content="yes" />
+    <meta name="apple-mobile-web-app-capable" content="yes" />
+    <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+    <meta name="apple-mobile-web-app-title" content="SullyOS" />
+    
+    <!-- Updated Icons -->
+    <link rel="icon" type="image/png" href="./icons/icon-192.png" />
+    <link rel="apple-touch-icon" sizes="180x180" href="./icons/apple-touch-icon.png" />
+
+    <!-- KaTeX CSS for Math Rendering -->
+    <link rel="stylesheet" href="https://unpkg.com/katex@0.16.9/dist/katex.min.css" integrity="sha384-n8MVd4RsNIU0tAv4ct0nTaAbDJwPJzDEaqSD1odI+WdtXRGWt2kTvGFasHpSy3SV" crossorigin="anonymous">
+
+    <script src="https://cdn.tailwindcss.com"></script>
+    <link href="https://fonts.googleapis.com/css2?family=Quicksand:wght@300;400;500;600&family=DM+Serif+Display:ital@0;1&family=Caveat:wght@400;500;600;700&family=Shippori+Mincho:wght@400;500;600;700&family=Courier+Prime:ital,wght@0,400;0,700;1,400&family=Ma+Shan+Zheng&family=Long+Cang&family=ZCOOL+KuaiLe&family=ZCOOL+XiaoWei&display=swap" rel="stylesheet">
+    <script>
+      tailwind.config = {
+        theme: {
+          extend: {
+            fontFamily: {
+              sans: ['var(--app-font)', 'sans-serif'],
+            },
+            colors: {
+              primary: 'hsl(var(--primary-hue), var(--primary-sat), var(--primary-lightness))', 
+              'primary-focus': 'hsl(var(--primary-hue), var(--primary-sat), calc(var(--primary-lightness) - 10%))',
+              'primary-light': 'hsl(var(--primary-hue), var(--primary-sat), 92%)',
+              surface: 'rgba(255, 255, 255, 0.75)',
+              'surface-glass': 'rgba(255, 255, 255, 0.35)',
+            },
+            animation: {
+              'fade-in': 'fadeIn 0.35s cubic-bezier(0.4, 0, 0.2, 1)',
+              'slide-up': 'slideUp 0.35s cubic-bezier(0.25, 1, 0.5, 1)',
+              'slide-down': 'slideDown 0.35s cubic-bezier(0.25, 1, 0.5, 1)',
+              'pop-in': 'popIn 0.35s cubic-bezier(0.175, 0.885, 0.32, 1.275)',
+              'float-up': 'floatUp 3s ease-out forwards',
+              'wiggle': 'wiggle 0.5s ease-in-out infinite',
+              'bounce-slow': 'bounceSlow 2s ease-in-out infinite',
+              'float': 'floatDrift 4s ease-in-out infinite alternate',
+              'glow-pulse': 'glowPulse 3s ease-in-out infinite',
+              'shimmer': 'shimmer 2.5s ease-in-out infinite',
+            },
+            keyframes: {
+              fadeIn: {
+                '0%': { opacity: '0', transform: 'scale(0.97) translateY(4px)' },
+                '100%': { opacity: '1', transform: 'scale(1) translateY(0)' },
+              },
+              slideUp: {
+                '0%': { transform: 'translateY(100%)', opacity: '0' },
+                '100%': { transform: 'translateY(0)', opacity: '1' },
+              },
+              slideDown: {
+                '0%': { transform: 'translateY(-100%)', opacity: '0' },
+                '100%': { transform: 'translateY(0)', opacity: '1' },
+              },
+              popIn: {
+                '0%': { opacity: '0', transform: 'scale(0.5)' },
+                '60%': { transform: 'scale(1.05)' },
+                '100%': { opacity: '1', transform: 'scale(1)' },
+              },
+              floatUp: {
+                '0%': { opacity: '1', transform: 'translateY(100vh) scale(1)' },
+                '50%': { opacity: '1' },
+                '100%': { opacity: '0', transform: 'translateY(-50px) scale(1.5)' },
+              },
+              wiggle: {
+                '0%, 100%': { transform: 'translate(-50%, -100%) rotate(-3deg)' },
+                '50%': { transform: 'translate(-50%, -100%) rotate(3deg)' },
+              },
+              bounceSlow: {
+                '0%, 100%': { transform: 'translateY(0)' },
+                '50%': { transform: 'translateY(-10px)' },
+              },
+              floatDrift: {
+                '0%': { transform: 'translateY(0) scale(1)', opacity: '0.3' },
+                '100%': { transform: 'translateY(-30px) scale(1.1)', opacity: '0.6' },
+              },
+              glowPulse: {
+                '0%, 100%': { boxShadow: '0 0 15px rgba(139, 92, 246, 0.15)' },
+                '50%': { boxShadow: '0 0 25px rgba(139, 92, 246, 0.3)' },
+              },
+              shimmer: {
+                '0%': { backgroundPosition: '-200% 0' },
+                '100%': { backgroundPosition: '200% 0' },
+              },
+            }
+          }
+        }
+      }
+    </script>
+    <style>
+      :root {
+        --primary-hue: 245; 
+        --primary-sat: 25%;
+        --primary-lightness: 65%;
+        --safe-area-bottom: env(safe-area-inset-bottom);
+        --app-height: 100lvh;
+        --keyboard-inset: 0px;
+        --app-font: 'Quicksand', sans-serif;
+      }
+      html, body, #root {
+        width: 100%;
+        min-height: var(--app-height, 100lvh);
+        height: var(--app-height, 100lvh);
+      }
+      body {
+        background-color: #0f1115;
+        margin: 0;
+        overflow: hidden;
+        /* Critical: Prevent browser back/forward swipe navigation AND vertical rubber-banding */
+        overscroll-behavior: none;
+        /* Prevent text selection to feel like an app */
+        user-select: none;
+        -webkit-user-select: none;
+        height: var(--app-height);
+        min-height: var(--app-height);
+        width: 100vw;
+        font-family: var(--app-font);
+      }
+      body.ios-standalone {
+        min-height: var(--app-height);
+        height: var(--app-height);
+        overscroll-behavior-y: auto;
+        overscroll-behavior-x: none;
+      }
+      body.ios-standalone #root {
+        min-height: var(--app-height);
+        height: var(--app-height);
+      }
+      /* Global scroll behavior fix */
+      .no-overscroll {
+        overscroll-behavior: none;
+      }
+      .overscroll-contain {
+        overscroll-behavior: contain;
+      }
+      /* Re-enable selection for inputs */
+      input, textarea {
+        user-select: text;
+        -webkit-user-select: text;
+      }
+      .no-scrollbar::-webkit-scrollbar {
+        display: none;
+      }
+      .no-scrollbar {
+        -ms-overflow-style: none;
+        scrollbar-width: none;
+      }
+      input:focus, textarea:focus, select:focus {
+        outline: none;
+      }
+      /* Utility for Safe Area */
+      .pb-safe {
+        padding-bottom: env(safe-area-inset-bottom);
+      }
+    </style>
+  <script type="importmap">
+{
+  "imports": {
+    "react": "https://esm.sh/react@^19.2.3",
+    "react-dom/": "https://esm.sh/react-dom@^19.2.3/",
+    "react/": "https://esm.sh/react@^19.2.3/",
+    "vite": "https://esm.sh/vite@^7.3.0",
+    "@vitejs/plugin-react": "https://esm.sh/@vitejs/plugin-react@^5.1.2",
+    "@capacitor/app": "https://esm.sh/@capacitor/app@^8.0.0",
+    "@capacitor/status-bar": "https://esm.sh/@capacitor/status-bar@^8.0.0",
+    "@capacitor/core": "https://esm.sh/@capacitor/core@^8.0.0",
+    "@capacitor/share": "https://esm.sh/@capacitor/share@^8.0.0",
+    "@capacitor/filesystem": "https://esm.sh/@capacitor/filesystem@^8.0.0",
+    "@capacitor/local-notifications": "https://esm.sh/@capacitor/local-notifications@^6.0.0",
+    "pdfjs-dist": "https://esm.sh/pdfjs-dist@3.11.174",
+    "katex": "https://esm.sh/katex@0.16.9"
+  }
+}
+</script>
+</head>
+  <body>
+    <div id="root"></div>
+    <script type="module" src="/index.tsx"></script>
+  </body>
+</html>

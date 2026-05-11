@@ -1,0 +1,557 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>2026 年 5 月 10 日小更新说明</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Fraunces:ital,opsz,wght@0,9..144,400;0,9..144,500;0,9..144,600;0,9..144,700;1,9..144,400&family=Noto+Serif+SC:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+<style>
+  :root {
+    --ink: #1a1a1a;
+    --ink-soft: #3d3d3d;
+    --ink-mute: #6b6b6b;
+    --ink-faint: #9a9a9a;
+    --paper: #f6f1f7;
+    --paper-warm: #ece4ed;
+    --rule: #ddd0e0;
+    --accent: #6b3a8b;
+    --accent-soft: #9a6abe;
+    --highlight: #e9d6f5;
+    --note-bg: #ece4ed;
+    --tip-bg: #e3eae8;
+    --warn-bg: #f4e2e8;
+    --mono: 'JetBrains Mono', ui-monospace, monospace;
+    --serif: 'Fraunces', 'Noto Serif SC', Georgia, serif;
+    --cn: 'Noto Serif SC', 'Fraunces', serif;
+  }
+
+  * { box-sizing: border-box; }
+  html { scroll-behavior: smooth; }
+
+  body {
+    margin: 0;
+    padding: 0;
+    background: var(--paper);
+    color: var(--ink);
+    font-family: var(--cn);
+    font-size: 17px;
+    line-height: 1.85;
+    font-feature-settings: "palt" 1, "kern" 1;
+    -webkit-font-smoothing: antialiased;
+    background-image:
+      radial-gradient(circle at 20% 10%, rgba(154, 106, 190, 0.05) 0%, transparent 40%),
+      radial-gradient(circle at 85% 90%, rgba(107, 58, 139, 0.04) 0%, transparent 40%);
+  }
+
+  body::before {
+    content: '';
+    position: fixed;
+    inset: 0;
+    pointer-events: none;
+    z-index: 0;
+    opacity: 0.4;
+    background-image: url("data:image/svg+xml,%3Csvg viewBox='0 0 200 200' xmlns='http://www.w3.org/2000/svg'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.9' numOctaves='2'/%3E%3CfeColorMatrix values='0 0 0 0 0.4 0 0 0 0 0.3 0 0 0 0 0.2 0 0 0 0.08 0'/%3E%3C/filter%3E%3Crect width='200' height='200' filter='url(%23n)'/%3E%3C/svg%3E");
+  }
+
+  .wrap {
+    position: relative;
+    z-index: 1;
+    max-width: 760px;
+    margin: 0 auto;
+    padding: 80px 32px 120px;
+  }
+
+  header.page {
+    border-bottom: 1px solid var(--rule);
+    padding-bottom: 48px;
+    margin-bottom: 56px;
+  }
+
+  .eyebrow {
+    font-family: var(--mono);
+    font-size: 11px;
+    letter-spacing: 0.3em;
+    text-transform: uppercase;
+    color: var(--accent);
+    margin-bottom: 24px;
+    display: flex;
+    align-items: center;
+    gap: 12px;
+  }
+
+  .eyebrow::after {
+    content: '';
+    flex: 1;
+    height: 1px;
+    background: var(--rule);
+  }
+
+  h1 {
+    font-family: var(--cn);
+    font-weight: 600;
+    font-size: 44px;
+    line-height: 1.25;
+    margin: 0 0 20px;
+    letter-spacing: -0.01em;
+  }
+
+  h1 .en {
+    display: block;
+    font-family: var(--serif);
+    font-style: italic;
+    font-weight: 400;
+    font-size: 22px;
+    color: var(--ink-mute);
+    margin-top: 12px;
+    letter-spacing: 0;
+  }
+
+  .lede {
+    font-size: 18px;
+    color: var(--ink-soft);
+    max-width: 600px;
+    margin-top: 28px;
+    line-height: 1.75;
+  }
+
+  .meta {
+    display: flex;
+    gap: 32px;
+    margin-top: 36px;
+    font-family: var(--mono);
+    font-size: 12px;
+    color: var(--ink-faint);
+    letter-spacing: 0.05em;
+    flex-wrap: wrap;
+  }
+
+  .meta span strong {
+    color: var(--ink-soft);
+    font-weight: 500;
+    margin-right: 8px;
+  }
+
+  .overview {
+    background: white;
+    border: 1px solid var(--rule);
+    border-radius: 4px;
+    padding: 24px 28px;
+    margin-bottom: 64px;
+  }
+
+  .overview h4 {
+    font-family: var(--mono);
+    font-size: 11px;
+    letter-spacing: 0.2em;
+    text-transform: uppercase;
+    color: var(--ink-mute);
+    margin: 0 0 14px;
+    font-weight: 500;
+  }
+
+  .overview ol {
+    margin: 0;
+    padding-left: 0;
+    list-style: none;
+    counter-reset: ov;
+  }
+
+  .overview li {
+    counter-increment: ov;
+    padding: 6px 0 6px 36px;
+    position: relative;
+    color: var(--ink-soft);
+    font-size: 15px;
+  }
+
+  .overview li::before {
+    content: counter(ov, decimal-leading-zero);
+    position: absolute;
+    left: 0;
+    top: 6px;
+    font-family: var(--serif);
+    font-style: italic;
+    color: var(--accent);
+    font-weight: 600;
+  }
+
+  .item {
+    margin-bottom: 56px;
+    scroll-margin-top: 40px;
+  }
+
+  .item-head {
+    display: flex;
+    align-items: baseline;
+    gap: 20px;
+    margin-bottom: 14px;
+    padding-bottom: 18px;
+    border-bottom: 1px dashed var(--rule);
+  }
+
+  .item-num {
+    font-family: var(--serif);
+    font-style: italic;
+    font-weight: 600;
+    font-size: 52px;
+    line-height: 1;
+    color: var(--accent);
+    flex-shrink: 0;
+  }
+
+  .item-title h2 {
+    font-family: var(--cn);
+    font-weight: 600;
+    font-size: 26px;
+    line-height: 1.3;
+    margin: 0 0 6px;
+    color: var(--ink);
+  }
+
+  .item-title .sub {
+    font-family: var(--serif);
+    font-style: italic;
+    color: var(--ink-mute);
+    font-size: 15px;
+  }
+
+  .tag-pill {
+    display: inline-block;
+    font-family: var(--mono);
+    font-size: 10px;
+    letter-spacing: 0.18em;
+    text-transform: uppercase;
+    color: var(--accent);
+    background: var(--paper-warm);
+    border: 1px solid var(--rule);
+    padding: 2px 10px;
+    border-radius: 999px;
+    margin-left: 4px;
+    vertical-align: middle;
+  }
+
+  .tag-pill.fix {
+    color: var(--ink-mute);
+  }
+
+  p {
+    margin: 0 0 18px;
+    color: var(--ink-soft);
+  }
+
+  strong {
+    color: var(--ink);
+    font-weight: 600;
+  }
+
+  em {
+    font-family: var(--serif);
+    font-style: italic;
+    color: var(--accent);
+    font-weight: 500;
+  }
+
+  code, .kbd {
+    font-family: var(--mono);
+    font-size: 0.88em;
+    background: var(--paper-warm);
+    padding: 2px 7px;
+    border-radius: 3px;
+    color: var(--accent);
+    border: 1px solid var(--rule);
+  }
+
+  mark {
+    background: linear-gradient(180deg, transparent 55%, var(--highlight) 55%);
+    color: var(--ink);
+    padding: 0 2px;
+  }
+
+  .path {
+    font-family: var(--mono);
+    font-size: 13px;
+    background: var(--paper-warm);
+    padding: 3px 10px;
+    border-radius: 3px;
+    color: var(--ink);
+    border: 1px solid var(--rule);
+    white-space: nowrap;
+    display: inline-block;
+  }
+
+  .path .sep {
+    color: var(--ink-faint);
+    margin: 0 6px;
+  }
+
+  ul.clean {
+    list-style: none;
+    padding: 0;
+    margin: 14px 0;
+  }
+
+  ul.clean li {
+    padding: 5px 0 5px 22px;
+    position: relative;
+    color: var(--ink-soft);
+    font-size: 15.5px;
+  }
+
+  ul.clean li::before {
+    content: '—';
+    position: absolute;
+    left: 0;
+    color: var(--accent);
+    font-weight: 600;
+  }
+
+  .note {
+    background: var(--note-bg);
+    border-left: 3px solid var(--ink-mute);
+    padding: 18px 22px;
+    border-radius: 3px;
+    margin: 22px 0;
+  }
+
+  .note .label {
+    font-family: var(--mono);
+    font-size: 10px;
+    letter-spacing: 0.25em;
+    text-transform: uppercase;
+    color: var(--ink-mute);
+    margin-bottom: 6px;
+    font-weight: 500;
+  }
+
+  .note p:last-child { margin-bottom: 0; }
+
+  .tip {
+    background: var(--tip-bg);
+    border-radius: 3px;
+    padding: 18px 22px;
+    margin: 22px 0;
+    border: 1px dashed #87a89d;
+  }
+
+  .tip .label {
+    font-family: var(--mono);
+    font-size: 10px;
+    letter-spacing: 0.25em;
+    text-transform: uppercase;
+    color: #4a6a5d;
+    margin-bottom: 6px;
+    font-weight: 600;
+  }
+
+  .tip p:last-child { margin-bottom: 0; }
+
+  ol.steps {
+    list-style: none;
+    padding-left: 0;
+    margin: 18px 0;
+    counter-reset: stp;
+  }
+
+  ol.steps > li {
+    counter-increment: stp;
+    padding: 10px 0 10px 44px;
+    position: relative;
+    color: var(--ink-soft);
+    font-size: 15.5px;
+    line-height: 1.75;
+  }
+
+  ol.steps > li::before {
+    content: counter(stp);
+    position: absolute;
+    left: 0;
+    top: 8px;
+    width: 28px;
+    height: 28px;
+    line-height: 26px;
+    text-align: center;
+    border-radius: 50%;
+    border: 1px solid var(--accent);
+    color: var(--accent);
+    font-family: var(--serif);
+    font-weight: 600;
+    font-size: 14px;
+    background: white;
+  }
+
+  .finale {
+    margin-top: 48px;
+    background: white;
+    border: 1px solid var(--rule);
+    border-radius: 4px;
+    padding: 30px 34px;
+    text-align: center;
+  }
+
+  .finale .big {
+    font-family: var(--cn);
+    font-size: 22px;
+    font-weight: 600;
+    color: var(--ink);
+    margin-bottom: 8px;
+  }
+
+  .finale .small {
+    color: var(--ink-mute);
+    font-size: 15px;
+    margin-bottom: 0;
+  }
+
+  footer.page {
+    margin-top: 72px;
+    padding-top: 32px;
+    border-top: 1px solid var(--rule);
+    text-align: center;
+    font-family: var(--serif);
+    font-style: italic;
+    color: var(--ink-faint);
+    font-size: 15px;
+  }
+
+  footer.page .ornament {
+    font-size: 20px;
+    color: var(--accent);
+    margin-bottom: 12px;
+    letter-spacing: 8px;
+  }
+
+  @media (max-width: 640px) {
+    .wrap { padding: 48px 20px 80px; }
+    h1 { font-size: 32px; }
+    h1 .en { font-size: 17px; }
+    .item-head { flex-direction: column; gap: 4px; align-items: flex-start; }
+    .item-num { font-size: 42px; }
+    .item-title h2 { font-size: 22px; }
+    .meta { flex-direction: column; gap: 6px; }
+    .finale { padding: 22px 20px; }
+  }
+</style>
+</head>
+<body>
+
+<div class="wrap">
+
+  <header class="page">
+    <div class="eyebrow">May 10, 2026 · Minor Update</div>
+    <h1>
+      「心象」上线
+      <span class="en">A small window into the model's mind.</span>
+    </h1>
+    <p class="lede">
+      这次是个<em>小更新</em> —— 主菜是新功能<em>「心象」</em>：把 AI 模型自己的思考链以二次元卡牌质感展示在角色每条回复的顶部。顺手修了「约会（见面模式）」的几个体验问题。
+    </p>
+    <div class="meta">
+      <span><strong>主题</strong>新功能 + 体验修复</span>
+      <span><strong>类型</strong>小版本更新</span>
+      <span><strong>阅读</strong>约 1 分钟</span>
+    </div>
+  </header>
+
+  <div class="overview">
+    <h4>本次更新概览</h4>
+    <ol>
+      <li>新增<strong>「心象」</strong>：在角色回复气泡顶部展示模型自己的思考链。</li>
+      <li>提供 <strong>4 种卡片风格</strong>（心象 / 心声 / 极简 / 自定）+ 自定义配色。</li>
+      <li>支持<strong>追加自定义提示词</strong>，原生提示词不覆盖。</li>
+      <li>修复「约会（见面模式）」<strong>历史构建口径</strong>不一致导致的 token 暴涨。</li>
+      <li>「约会（见面模式）」<strong>API 失败后按发送键即可重试</strong>，不必重打字。</li>
+    </ol>
+  </div>
+
+  <!-- 1 -->
+  <section class="item" id="i-psyche">
+    <div class="item-head">
+      <div class="item-num">01</div>
+      <div class="item-title">
+        <h2>新增 · 「心象」 <span class="tag-pill">NEW</span></h2>
+        <div class="sub">让你看见模型的思考。</div>
+      </div>
+    </div>
+    <p>
+      开启后，角色每次回复，气泡顶部会浮出一张<mark>「心象」卡片</mark>——里面是 AI 模型在准备这条回复时<strong>自己原生输出的思考链</strong>（OpenAI 协议里的 <code>reasoning_content</code> 或 <code>&lt;think&gt;</code> 标签内容）。我们用 prompt 尽量把它染成角色第一人称的内心独白。
+    </p>
+
+    <p><strong>开启位置</strong></p>
+    <ol class="steps">
+      <li>进入任意角色的<strong>聊天界面</strong>。</li>
+      <li>点击输入框左侧的<span class="path">＋</span>号，弹出操作面板。</li>
+      <li>滑到<strong>第二页</strong>（麦当劳 / HTML 模式所在的那页）。</li>
+      <li>点击<span class="path">展示思考</span>按钮——会直接打开「心象」设置弹窗，里面有总开关、卡片风格、自定义配色、追加提示词。</li>
+    </ol>
+
+    <p><strong>卡片风格</strong></p>
+    <ul class="clean">
+      <li><strong>心象</strong>（默认）：暗紫 × 暖金，二次元游戏卡牌质感。</li>
+      <li><strong>心声</strong>：羊皮纸暖色，私密日记的氛围。</li>
+      <li><strong>极简</strong>：纯白单色，OOC 调试视图。</li>
+      <li><strong>自定</strong>：背景 / 点缀 / 正文三色调教，背景支持 CSS 渐变。</li>
+    </ul>
+
+    <p><strong>追加自定义提示词</strong></p>
+    <p>
+      原生提示词（让模型用角色第一人称、中文意识流思考）保持不变；你写的内容追加在最后作为「用户对内心独白的额外要求」。比如让 ta 思考时偶尔切到日语、多写感官细节、用昵称叫你等等。
+    </p>
+
+    <div class="note">
+      <div class="label">关于「心象」的本质</div>
+      <p>
+        这是模型<strong>自己原生的思考链</strong>，不是我们额外让模型为角色生成的"内心戏"。它的本质决定了它<strong>不会像角色台词那样鲜活</strong>——更像看一个演员在化妆间的喃喃自语，而不是舞台上的台词。这个功能本来就是给"喜欢看大模型思维链"的用户准备的彩蛋，<mark>不一定适合每个人</mark>，觉得跳戏直接关掉就好。
+      </p>
+      <p style="margin-top: 10px;">
+        另外：思维链<strong>不进入上下文</strong>，也<strong>不会成为角色真实回复的一部分</strong>——所以下一轮，角色不会记得自己上一轮在想什么，ta 只会基于真正发出去的回复（+ 对话历史）往下走。
+      </p>
+    </div>
+
+    <div class="tip">
+      <div class="label">没看到「心象」卡片？</div>
+      <p>
+        最常见的原因是<strong>当前模型不带思考链能力</strong>——请问你 API 提供者哪些模型支持 thinking，或自己查找。次常见的原因是<strong>这一轮模型没思考</strong>（短回复 / 模型自己判断不需要），属于正常现象，下一轮可能就有。如果是<strong>代理拒绝转发 thinking 字段</strong>，跟 API 提供方确认对应模型是否启用了 extended thinking。
+      </p>
+    </div>
+  </section>
+
+  <!-- 2 -->
+  <section class="item" id="i-date-fix">
+    <div class="item-head">
+      <div class="item-num">02</div>
+      <div class="item-title">
+        <h2>修复 · 「约会（见面模式）」上下文与重发体验 <span class="tag-pill fix">FIX</span></h2>
+        <div class="sub">不再 400，按一下就重发。</div>
+      </div>
+    </div>
+    <p>
+      之前在「约会（见面模式）」里偶尔会遇到 <code>prompt is too long</code>（上下文超 200K tokens）的 400 报错，明明聊天界面里看 token 才四万多。原因是「约会（见面模式）」自己写的历史构建器<mark>没对齐聊天</mark>：
+    </p>
+    <ul class="clean">
+      <li>开了向量记忆<strong>不按高水位线裁剪</strong>，旧消息全文回放</li>
+      <li>表情包 / HTML 卡片 / 转发等<strong>没按类型脱水</strong>，原始 content 直接塞进 prompt</li>
+    </ul>
+    <p>
+      现在两端共用同一份精细脱水逻辑，token 占用回到聊天侧的同一量级。
+    </p>
+    <p>
+      另外修复了「<strong>API 失败后必须重新打字才能重试</strong>」的体验问题。现在如果上一轮发出去 API 报错，输入框为空时按发送键，按钮会变成 <code>RETRY</code>，直接拿上一条已存的内容重新触发 LLM，<strong>不会重复落库</strong>。
+    </p>
+  </section>
+
+  <div class="finale">
+    <p class="big">这就是 5 月 10 日的小更新</p>
+    <p class="small">如果「心象」让你跳戏，关掉就好；如果让你着迷，欢迎调成自己的味道。</p>
+  </div>
+
+  <footer class="page">
+    <div class="ornament">· · ·</div>
+    SullyOS Changelog · 2026.05.10
+  </footer>
+
+</div>
+
+</body>
+</html>

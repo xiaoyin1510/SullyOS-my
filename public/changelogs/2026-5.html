@@ -1,0 +1,692 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>2026 年 5 月更新说明</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Fraunces:ital,opsz,wght@0,9..144,400;0,9..144,500;0,9..144,600;0,9..144,700;1,9..144,400&family=Noto+Serif+SC:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+<style>
+  :root {
+    --ink: #1a1a1a;
+    --ink-soft: #3d3d3d;
+    --ink-mute: #6b6b6b;
+    --ink-faint: #9a9a9a;
+    --paper: #faf7f2;
+    --paper-warm: #f2ede3;
+    --rule: #e4ddd1;
+    --accent: #8b3a1f;
+    --accent-soft: #c4664a;
+    --highlight: #f5e9a8;
+    --note-bg: #efe9dc;
+    --tip-bg: #e8efe3;
+    --warn-bg: #f4e6d8;
+    --mono: 'JetBrains Mono', ui-monospace, monospace;
+    --serif: 'Fraunces', 'Noto Serif SC', Georgia, serif;
+    --cn: 'Noto Serif SC', 'Fraunces', serif;
+  }
+
+  * { box-sizing: border-box; }
+  html { scroll-behavior: smooth; }
+
+  body {
+    margin: 0;
+    padding: 0;
+    background: var(--paper);
+    color: var(--ink);
+    font-family: var(--cn);
+    font-size: 17px;
+    line-height: 1.85;
+    font-feature-settings: "palt" 1, "kern" 1;
+    -webkit-font-smoothing: antialiased;
+    background-image:
+      radial-gradient(circle at 20% 10%, rgba(196, 102, 74, 0.04) 0%, transparent 40%),
+      radial-gradient(circle at 85% 90%, rgba(139, 58, 31, 0.03) 0%, transparent 40%);
+  }
+
+  body::before {
+    content: '';
+    position: fixed;
+    inset: 0;
+    pointer-events: none;
+    z-index: 0;
+    opacity: 0.4;
+    background-image: url("data:image/svg+xml,%3Csvg viewBox='0 0 200 200' xmlns='http://www.w3.org/2000/svg'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.9' numOctaves='2'/%3E%3CfeColorMatrix values='0 0 0 0 0.4 0 0 0 0 0.3 0 0 0 0 0.2 0 0 0 0.08 0'/%3E%3C/filter%3E%3Crect width='200' height='200' filter='url(%23n)'/%3E%3C/svg%3E");
+  }
+
+  .wrap {
+    position: relative;
+    z-index: 1;
+    max-width: 760px;
+    margin: 0 auto;
+    padding: 80px 32px 120px;
+  }
+
+  header.page {
+    border-bottom: 1px solid var(--rule);
+    padding-bottom: 48px;
+    margin-bottom: 56px;
+  }
+
+  .eyebrow {
+    font-family: var(--mono);
+    font-size: 11px;
+    letter-spacing: 0.3em;
+    text-transform: uppercase;
+    color: var(--accent);
+    margin-bottom: 24px;
+    display: flex;
+    align-items: center;
+    gap: 12px;
+  }
+
+  .eyebrow::after {
+    content: '';
+    flex: 1;
+    height: 1px;
+    background: var(--rule);
+  }
+
+  h1 {
+    font-family: var(--cn);
+    font-weight: 600;
+    font-size: 44px;
+    line-height: 1.25;
+    margin: 0 0 20px;
+    letter-spacing: -0.01em;
+  }
+
+  h1 .en {
+    display: block;
+    font-family: var(--serif);
+    font-style: italic;
+    font-weight: 400;
+    font-size: 22px;
+    color: var(--ink-mute);
+    margin-top: 12px;
+    letter-spacing: 0;
+  }
+
+  .lede {
+    font-size: 18px;
+    color: var(--ink-soft);
+    max-width: 600px;
+    margin-top: 28px;
+    line-height: 1.75;
+  }
+
+  .meta {
+    display: flex;
+    gap: 32px;
+    margin-top: 36px;
+    font-family: var(--mono);
+    font-size: 12px;
+    color: var(--ink-faint);
+    letter-spacing: 0.05em;
+    flex-wrap: wrap;
+  }
+
+  .meta span strong {
+    color: var(--ink-soft);
+    font-weight: 500;
+    margin-right: 8px;
+  }
+
+  /* 概览 */
+  .overview {
+    background: white;
+    border: 1px solid var(--rule);
+    border-radius: 4px;
+    padding: 24px 28px;
+    margin-bottom: 64px;
+  }
+
+  .overview h4 {
+    font-family: var(--mono);
+    font-size: 11px;
+    letter-spacing: 0.2em;
+    text-transform: uppercase;
+    color: var(--ink-mute);
+    margin: 0 0 14px;
+    font-weight: 500;
+  }
+
+  .overview ol {
+    margin: 0;
+    padding-left: 0;
+    list-style: none;
+    counter-reset: ov;
+  }
+
+  .overview li {
+    counter-increment: ov;
+    padding: 6px 0 6px 36px;
+    position: relative;
+    color: var(--ink-soft);
+    font-size: 15px;
+  }
+
+  .overview li::before {
+    content: counter(ov, decimal-leading-zero);
+    position: absolute;
+    left: 0;
+    top: 6px;
+    font-family: var(--serif);
+    font-style: italic;
+    color: var(--accent);
+    font-weight: 600;
+  }
+
+  /* 条目 */
+  .item {
+    margin-bottom: 56px;
+    scroll-margin-top: 40px;
+  }
+
+  .item-head {
+    display: flex;
+    align-items: baseline;
+    gap: 20px;
+    margin-bottom: 14px;
+    padding-bottom: 18px;
+    border-bottom: 1px dashed var(--rule);
+  }
+
+  .item-num {
+    font-family: var(--serif);
+    font-style: italic;
+    font-weight: 600;
+    font-size: 52px;
+    line-height: 1;
+    color: var(--accent);
+    flex-shrink: 0;
+  }
+
+  .item-title h2 {
+    font-family: var(--cn);
+    font-weight: 600;
+    font-size: 26px;
+    line-height: 1.3;
+    margin: 0 0 6px;
+    color: var(--ink);
+  }
+
+  .item-title .sub {
+    font-family: var(--serif);
+    font-style: italic;
+    color: var(--ink-mute);
+    font-size: 15px;
+  }
+
+  .tag-pill {
+    display: inline-block;
+    font-family: var(--mono);
+    font-size: 10px;
+    letter-spacing: 0.18em;
+    text-transform: uppercase;
+    color: var(--accent);
+    background: var(--paper-warm);
+    border: 1px solid var(--rule);
+    padding: 2px 10px;
+    border-radius: 999px;
+    margin-left: 4px;
+    vertical-align: middle;
+  }
+
+  .tag-pill.fix {
+    color: var(--ink-mute);
+  }
+
+  p {
+    margin: 0 0 18px;
+    color: var(--ink-soft);
+  }
+
+  strong {
+    color: var(--ink);
+    font-weight: 600;
+  }
+
+  em {
+    font-family: var(--serif);
+    font-style: italic;
+    color: var(--accent);
+    font-weight: 500;
+  }
+
+  code, .kbd {
+    font-family: var(--mono);
+    font-size: 0.88em;
+    background: var(--paper-warm);
+    padding: 2px 7px;
+    border-radius: 3px;
+    color: var(--accent);
+    border: 1px solid var(--rule);
+  }
+
+  mark {
+    background: linear-gradient(180deg, transparent 55%, var(--highlight) 55%);
+    color: var(--ink);
+    padding: 0 2px;
+  }
+
+  .path {
+    font-family: var(--mono);
+    font-size: 13px;
+    background: var(--paper-warm);
+    padding: 3px 10px;
+    border-radius: 3px;
+    color: var(--ink);
+    border: 1px solid var(--rule);
+    white-space: nowrap;
+    display: inline-block;
+  }
+
+  .path .sep {
+    color: var(--ink-faint);
+    margin: 0 6px;
+  }
+
+  ul.clean {
+    list-style: none;
+    padding: 0;
+    margin: 14px 0;
+  }
+
+  ul.clean li {
+    padding: 5px 0 5px 22px;
+    position: relative;
+    color: var(--ink-soft);
+    font-size: 15.5px;
+  }
+
+  ul.clean li::before {
+    content: '—';
+    position: absolute;
+    left: 0;
+    color: var(--accent);
+    font-weight: 600;
+  }
+
+  .note {
+    background: var(--note-bg);
+    border-left: 3px solid var(--ink-mute);
+    padding: 18px 22px;
+    border-radius: 3px;
+    margin: 22px 0;
+  }
+
+  .note .label {
+    font-family: var(--mono);
+    font-size: 10px;
+    letter-spacing: 0.25em;
+    text-transform: uppercase;
+    color: var(--ink-mute);
+    margin-bottom: 6px;
+    font-weight: 500;
+  }
+
+  .note p:last-child { margin-bottom: 0; }
+
+  .tip {
+    background: var(--tip-bg);
+    border-radius: 3px;
+    padding: 18px 22px;
+    margin: 22px 0;
+    border: 1px dashed #9fb598;
+  }
+
+  .tip .label {
+    font-family: var(--mono);
+    font-size: 10px;
+    letter-spacing: 0.25em;
+    text-transform: uppercase;
+    color: #5c7a54;
+    margin-bottom: 6px;
+    font-weight: 600;
+  }
+
+  .tip p:last-child { margin-bottom: 0; }
+
+  /* 步骤数字列表 */
+  ol.steps {
+    list-style: none;
+    padding-left: 0;
+    margin: 18px 0;
+    counter-reset: stp;
+  }
+
+  ol.steps > li {
+    counter-increment: stp;
+    padding: 10px 0 10px 44px;
+    position: relative;
+    color: var(--ink-soft);
+    font-size: 15.5px;
+    line-height: 1.75;
+  }
+
+  ol.steps > li::before {
+    content: counter(stp);
+    position: absolute;
+    left: 0;
+    top: 8px;
+    width: 28px;
+    height: 28px;
+    line-height: 26px;
+    text-align: center;
+    border-radius: 50%;
+    border: 1px solid var(--accent);
+    color: var(--accent);
+    font-family: var(--serif);
+    font-weight: 600;
+    font-size: 14px;
+    background: white;
+  }
+
+  .finale {
+    margin-top: 48px;
+    background: white;
+    border: 1px solid var(--rule);
+    border-radius: 4px;
+    padding: 30px 34px;
+    text-align: center;
+  }
+
+  .finale .big {
+    font-family: var(--cn);
+    font-size: 22px;
+    font-weight: 600;
+    color: var(--ink);
+    margin-bottom: 8px;
+  }
+
+  .finale .small {
+    color: var(--ink-mute);
+    font-size: 15px;
+    margin-bottom: 0;
+  }
+
+  footer.page {
+    margin-top: 72px;
+    padding-top: 32px;
+    border-top: 1px solid var(--rule);
+    text-align: center;
+    font-family: var(--serif);
+    font-style: italic;
+    color: var(--ink-faint);
+    font-size: 15px;
+  }
+
+  footer.page .ornament {
+    font-size: 20px;
+    color: var(--accent);
+    margin-bottom: 12px;
+    letter-spacing: 8px;
+  }
+
+  @media (max-width: 640px) {
+    .wrap { padding: 48px 20px 80px; }
+    h1 { font-size: 32px; }
+    h1 .en { font-size: 17px; }
+    .item-head { flex-direction: column; gap: 4px; align-items: flex-start; }
+    .item-num { font-size: 42px; }
+    .item-title h2 { font-size: 22px; }
+    .meta { flex-direction: column; gap: 6px; }
+    .finale { padding: 22px 20px; }
+  }
+</style>
+</head>
+<body>
+
+<div class="wrap">
+
+  <header class="page">
+    <div class="eyebrow">May 2026 · Update Notes</div>
+    <h1>
+      2026 年 5 月更新说明
+      <span class="en">McDonald's MCP, HTML cards, and a round of polish.</span>
+    </h1>
+    <p class="lede">
+      这一次的变化稍多一点 —— <em>GitHub 数据备份</em>、<em>音乐 App 弱化梯子依赖</em>、<em>麦当劳 MCP</em>、<em>聊天 HTML 模块</em>、<em>写歌生成音乐</em>、<em>API 高级开关</em>、<em>SULLY 默认外观皮肤</em>，再加上对世界书、桌面小组件和群聊的若干修复。
+    </p>
+    <div class="meta">
+      <span><strong>主题</strong>新功能 + Bug 修复</span>
+      <span><strong>类型</strong>版本更新说明</span>
+      <span><strong>阅读</strong>约 2 分钟</span>
+    </div>
+  </header>
+
+  <div class="overview">
+    <h4>本次更新概览</h4>
+    <ol>
+      <li>数据备份可以走 GitHub 了：在「设置 - 数据」中按指引接入云端，<strong>这一段不再需要梯子</strong>。</li>
+      <li>音乐 App 对梯子的要求减弱，<strong>一定程度上可以裸连</strong>。</li>
+      <li>新增「麦当劳 MCP」：在设置里配置后，从聊天加号第二页进入点餐界面。</li>
+      <li>新增「HTML 模块」：聊天加号里，紧挨着麦当劳功能的位置。</li>
+      <li>新增「写歌生成音乐」：和角色一起写的歌词，现在能直接生成音乐。</li>
+      <li>API 配置追加<strong>流式开关</strong>与<strong>温度调整</strong>（给更高阶的玩家用，不建议主动碰）。</li>
+      <li>外观 - 预设追加 <strong>SULLY 默认外观皮肤</strong>。</li>
+      <li>修复世界书相关若干 bug。</li>
+      <li>修复桌面小组件相关若干 bug。</li>
+      <li>修复群聊相关若干 bug。</li>
+    </ol>
+  </div>
+
+  <!-- 1 -->
+  <section class="item" id="i-github-backup">
+    <div class="item-head">
+      <div class="item-num">01</div>
+      <div class="item-title">
+        <h2>新增 · GitHub 数据备份 <span class="tag-pill">NEW</span></h2>
+        <div class="sub">把存档放进自己的 GitHub 仓库，还不用挂梯子。</div>
+      </div>
+    </div>
+    <p>
+      数据备份现在可以<mark>直接走 GitHub</mark>。在<span class="path">设置 App<span class="sep">›</span>数据</span>里能看到新的<strong>云端数据</strong>区域，按指引一步步接入即可。
+    </p>
+    <ul class="clean">
+      <li>云端数据这部分接的是 GitHub 仓库，<strong>不再需要梯子</strong>就能正常用。</li>
+      <li>每一次备份都对应一次仓库提交，历史记录可追溯。</li>
+      <li>换设备 / 重装时，可以直接从 GitHub 把数据拉回来。</li>
+    </ul>
+    <div class="note">
+      <div class="label">配置位置</div>
+      <p><span class="path">设置<span class="sep">›</span>数据<span class="sep">›</span>云端数据（GitHub）</span> ——按界面里的指引一步步授权和填写即可。</p>
+    </div>
+  </section>
+
+  <!-- 2 -->
+  <section class="item" id="i-music-network">
+    <div class="item-head">
+      <div class="item-num">02</div>
+      <div class="item-title">
+        <h2>优化 · 音乐 App 弱化梯子依赖 <span class="tag-pill fix">POLISH</span></h2>
+        <div class="sub">不挂梯子也能听一段。</div>
+      </div>
+    </div>
+    <p>
+      调整了音乐 App 的网络与资源链路，<mark>对梯子的要求明显减弱</mark>，一定程度上可以裸连使用。
+    </p>
+    <ul class="clean">
+      <li>常规听歌、封面加载等场景在国内网络下更稳。</li>
+      <li>极少数仍需要梯子的资源会自动回退或提示。</li>
+      <li>如果之前因为网络一直打不开音乐 App，这次值得再试一次。</li>
+    </ul>
+  </section>
+
+  <!-- 3 -->
+  <section class="item" id="i-mcdonald">
+    <div class="item-head">
+      <div class="item-num">03</div>
+      <div class="item-title">
+        <h2>新增 · 麦当劳 MCP <span class="tag-pill">NEW</span></h2>
+        <div class="sub">让角色帮你点一份麦当劳。</div>
+      </div>
+    </div>
+    <p>
+      新增<mark>麦当劳 MCP</mark>能力，把点餐变成角色可以参与的一段日常。开启后，你可以让角色一起翻菜单、推荐套餐、最终下到一份属于你们俩的订单。
+    </p>
+
+    <p><strong>开启位置</strong></p>
+    <p>
+      <span class="path">设置 App<span class="sep">›</span>麦当劳 MCP</span>
+      ——按设置内的提示一步步配置好之后即可使用。
+    </p>
+
+    <p><strong>使用方式</strong></p>
+    <ol class="steps">
+      <li>进入任意角色的聊天界面。</li>
+      <li>点击聊天输入框旁的 <code>+</code> 加号，<strong>滑动到第二页</strong>。</li>
+      <li>找到「<strong>麦当劳点餐</strong>」入口，点击进入点餐界面。</li>
+    </ol>
+
+    <div class="tip">
+      <div class="label">温馨提示</div>
+      <p>第一次使用记得回到 <strong>设置 App</strong> 完成配置。没配置好的话加号里的入口会无法正常工作。</p>
+    </div>
+  </section>
+
+  <!-- 4 -->
+  <section class="item" id="i-html">
+    <div class="item-head">
+      <div class="item-num">04</div>
+      <div class="item-title">
+        <h2>新增 · HTML 模块 <span class="tag-pill">NEW</span></h2>
+        <div class="sub">让 AI 输出可渲染的小卡片。</div>
+      </div>
+    </div>
+    <p>
+      新增<mark>HTML 模块</mark>，让聊天里能直接出现一段经过渲染的 HTML 小卡片，无论是漂亮的列表、徽章、还是一张迷你海报，都能让对话显得更立体。
+    </p>
+    <p><strong>开启位置</strong></p>
+    <p>
+      聊天界面 <code>+</code> 加号<strong>第二页</strong>，紧挨着「麦当劳点餐」功能的旁边即可看到「HTML」入口。
+    </p>
+    <ul class="clean">
+      <li>点开后会进入 HTML 模块的快捷开关与说明。</li>
+      <li>开启后，AI 输出的 <code>[html]...[/html]</code> 卡片会被渲染成可视化样式。</li>
+      <li>关闭后，原文会以普通文本形式呈现，不会丢失内容。</li>
+    </ul>
+  </section>
+
+  <!-- 5 -->
+  <section class="item" id="i-songwriting">
+    <div class="item-head">
+      <div class="item-num">05</div>
+      <div class="item-title">
+        <h2>新增 · 写歌生成音乐 <span class="tag-pill">NEW</span></h2>
+        <div class="sub">让那些被写下的歌词，真的开始唱起来。</div>
+      </div>
+    </div>
+    <p>
+      新增<mark>写歌生成音乐</mark>能力。以前你和角色在「写歌」里反复修改的歌词，只能停在文字阶段；现在它们可以被<strong>直接生成成一段可播放的音乐</strong>。
+    </p>
+    <ul class="clean">
+      <li>角色（char）写出的歌词同样支持一键生成。</li>
+      <li>生成结果会回到写歌作品里，可随时回听。</li>
+      <li>风格和情绪可以在歌词里点拨，让生成更贴你想要的样子。</li>
+    </ul>
+    <div class="note">
+      <div class="label">小提醒</div>
+      <p>音乐生成依赖外部能力，第一次使用前请先确认对应配置已就绪。</p>
+    </div>
+  </section>
+
+  <!-- 6 -->
+  <section class="item" id="i-api-advanced">
+    <div class="item-head">
+      <div class="item-num">06</div>
+      <div class="item-title">
+        <h2>新增 · API 流式开关 & 温度调整 <span class="tag-pill">NEW</span></h2>
+        <div class="sub">给更高阶的玩家留一道小门。</div>
+      </div>
+    </div>
+    <p>
+      在 API 配置里追加了<mark>流式开关</mark>与<mark>温度调整</mark>两项。它们藏在<strong>「高级」折叠区</strong>里，默认收起、字色偏灰，并明确标注「不建议主动修改」。
+    </p>
+    <ul class="clean">
+      <li><strong>流式开关</strong>：控制是否走流式输出。绝大多数模型保持默认即可。</li>
+      <li><strong>温度</strong>：影响回复的随机度。改动会显著改变角色风格，慎调。</li>
+    </ul>
+    <div class="warn" style="background: var(--warn-bg); border-left: 3px solid var(--accent); padding: 18px 22px; border-radius: 3px; margin: 22px 0;">
+      <div class="label" style="font-family: var(--mono); font-size: 10px; letter-spacing: 0.25em; text-transform: uppercase; color: var(--accent); margin-bottom: 6px; font-weight: 600;">面向高阶用户</div>
+      <p>如果你不知道这两项是干什么的，<strong>请保持默认</strong>。它们更像"留给折腾党"的开关，新手碰了反而容易把回复弄坏。</p>
+    </div>
+  </section>
+
+  <!-- 7 -->
+  <section class="item" id="i-sully-skin">
+    <div class="item-head">
+      <div class="item-num">07</div>
+      <div class="item-title">
+        <h2>新增 · SULLY 默认外观皮肤 <span class="tag-pill">NEW</span></h2>
+        <div class="sub">把 SULLY 原本的样子，做成了一个可一键复原的预设。</div>
+      </div>
+    </div>
+    <p>
+      <span class="path">外观<span class="sep">›</span>预设</span> 里追加了一份 <mark>SULLY 默认外观皮肤</mark>。无论你之前怎么折腾过壁纸、配色、字体，都可以一键回到最初的 SULLY 模样。
+    </p>
+    <ul class="clean">
+      <li>位置：外观 App → 预设列表，名字就是 SULLY 默认外观。</li>
+      <li>点击应用即可恢复，原有自定义不会被立刻覆盖到不可逆。</li>
+      <li>适合"折腾完想回家"或者"不知道选什么先用着"的场景。</li>
+    </ul>
+  </section>
+
+  <!-- 8 -->
+  <section class="item" id="i-worldbook">
+    <div class="item-head">
+      <div class="item-num">08</div>
+      <div class="item-title">
+        <h2>修复 · 世界书相关 bug <span class="tag-pill fix">FIX</span></h2>
+        <div class="sub">让世界设定更稳一点。</div>
+      </div>
+    </div>
+    <p>
+      优化了世界书相关的若干 bug，使条目读取、命中和编辑更稳定。如果你之前遇到过世界书条目偶尔不生效或显示异常的情况，本次更新后基本会得到改善。
+    </p>
+  </section>
+
+  <!-- 9 -->
+  <section class="item" id="i-widget">
+    <div class="item-head">
+      <div class="item-num">09</div>
+      <div class="item-title">
+        <h2>修复 · 桌面小组件相关 bug <span class="tag-pill fix">FIX</span></h2>
+        <div class="sub">让桌面回到它该有的样子。</div>
+      </div>
+    </div>
+    <p>
+      优化了桌面小组件相关的若干 bug，包括偶发的展示异常和数据刷新问题。重启一次模拟器后效果更佳。
+    </p>
+  </section>
+
+  <!-- 10 -->
+  <section class="item" id="i-groupchat">
+    <div class="item-head">
+      <div class="item-num">10</div>
+      <div class="item-title">
+        <h2>修复 · 群聊相关 bug <span class="tag-pill fix">FIX</span></h2>
+        <div class="sub">让群里的那群人，少出点幺蛾子。</div>
+      </div>
+    </div>
+    <p>
+      优化了群聊相关的若干 bug，让多人对话场景下的发言顺序、消息归属与界面表现更接近预期。
+    </p>
+  </section>
+
+  <div class="finale">
+    <p class="big">这就是 2026 年 5 月的更新</p>
+    <p class="small">愿你和角色们点到喜欢的那一份麦麦。</p>
+  </div>
+
+  <footer class="page">
+    <div class="ornament">· · ·</div>
+    SullyOS Changelog · 2026.05
+  </footer>
+
+</div>
+
+</body>
+</html>
