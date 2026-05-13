@@ -17,6 +17,7 @@ import { ChatPrompts } from './chatPrompts';
 import { injectMemoryPalace } from './memoryPalace/pipeline';
 import { buildHtmlPrompt } from './htmlPrompt';
 import { buildThinkingChainPrompt } from './thinkingChainPrompt';
+import { buildNuomiCommercePrompt, isNuomiCommerceFeatureEnabled } from './nuomiCommerceFeature';
 import { buildMcdMiniAppContextBlock } from './mcdToolBridge';
 import type { McdMiniAppSnapshot } from './mcdToolBridge';
 import type { MusicCfg, Song, LyricLine, MusicPlaybackSnapshot } from '../context/MusicContext';
@@ -60,6 +61,8 @@ export interface BuildChatPayloadInput {
     htmlMode?: { enabled: boolean; customPrompt?: string };
     thinkingChain?: { enabled: boolean; customPrompt?: string };
     mcdMiniSnap?: McdMiniAppSnapshot;
+    /** 购物/外卖功能开关。undefined 时读取插件自己的 localStorage 开关。 */
+    commerce?: { enabled?: boolean };
 }
 
 export interface BuildChatPayloadResult {
@@ -69,8 +72,8 @@ export interface BuildChatPayloadResult {
     cleanedApiMessages: Array<{ role: string; content: any }>;
     /** [system, ...cleanedApiMessages, 末尾 bilingual reminder?] —— 主 API 直接发这个 */
     fullMessages: Array<{ role: string; content: any }>;
-    /** 调试用：bilingual / mcd 是否实际注入 */
-    flags: { bilingualActive: boolean; mcdActive: boolean; htmlActive: boolean; thinkingActive: boolean };
+    /** 调试用：可选提示词块是否实际注入 */
+    flags: { bilingualActive: boolean; mcdActive: boolean; htmlActive: boolean; thinkingActive: boolean; commerceActive: boolean };
 }
 
 /**
@@ -203,29 +206,13 @@ export async function buildChatRequestPayload(input: BuildChatPayloadInput): Pro
 
 
     // ── 6.5 购物中心 / 外卖自主卡片能力 ─────────────────────
-    // 参考 330 小手机：不是临时塞一条“主动购买提示”，而是把可用动作长期写入主 system prompt。
-    // 模型只有在符合人设、关系和上下文时才使用；不用时正常聊天即可。
-    const commerceUserName = (userProfile?.name && userProfile.name.trim()) || '用户';
-    systemPrompt += `
-
-## 购物中心 / 外卖卡片能力（可选，不要强行使用）
-你可以像真实生活中的人一样，在合适的时机主动给 ${commerceUserName} 买东西或点外卖；也可以拒绝消费、开玩笑、转移话题或只用文字回应。不要为了使用功能而使用功能。
-
-当你确实决定“主动给用户买东西/点外卖”时，在自然回复中附加一条内部动作标签，系统会把它渲染成聊天卡片。格式必须严格如下（二选一）：
-[[NUOMI_COMMERCE: {"kind":"char_purchase_to_user","name":"暖手宝","amount":39,"note":"怕你手冷"}]]
-[[NUOMI_COMMERCE: {"kind":"char_delivery_to_user","name":"热奶茶","amount":18,"note":"陪你加班"}]]
-
-当聊天里出现“外卖代付请求”卡片时，是否付款由你根据人设、经济状况、关系和上下文决定。这里绝对不要使用原版转账/红包动作（不要输出 [[ACTION:TRANSFER:金额]]，也不要写“系统：转账”日志），因为代付请求只能通过下面的外卖支付结果卡片完成。若你决定支付或拒绝，请在自然回复中附加下面的内部动作标签之一，系统会弹出“已完成支付/已拒绝支付”卡片：
-[[NUOMI_COMMERCE: {"kind":"delivery_payment_response","status":"paid","name":"杨枝甘露","amount":21,"note":"顺手付了"}]]
-[[NUOMI_COMMERCE: {"kind":"delivery_payment_response","status":"rejected","name":"杨枝甘露","amount":21,"note":"今天不想付"}]]
-
-规则：
-- 主动购买/点外卖标签只在你真的想主动购买/点外卖时使用；平时不要输出。
-- 外卖代付回应只在你确实要对代付请求做出支付/拒绝选择时使用；不要让用户手动替你选择；也不要用转账/红包功能代替。
-- 价格要符合你的人设、经济状况和关系，不要总是示例价。
-- name 必须是具体商品/外卖名，amount 必须是数字。
-- 标签外可以正常说话；不要向用户解释标签格式。
-- 如果聊天里出现购物/外卖卡片，你要根据卡片信息、详情页、数量、价格和备注自然回应，不要机械复述。`;
+    // v12 改成插件独立开关：关闭时不向主 system prompt 追加任何购物/外卖提示词，普通聊天尽量保持原版。
+    // 打开后才注入长期动作说明，参考天气/HTML/思考链等可选能力的开关模式。
+    const commerceActive = input.commerce?.enabled ?? isNuomiCommerceFeatureEnabled();
+    if (commerceActive) {
+        const commerceUserName = (userProfile?.name && userProfile.name.trim()) || '用户';
+        systemPrompt += buildNuomiCommercePrompt(commerceUserName);
+    }
 
     // ── 7. 历史消息构造 ───────────────────────────────────
     const { apiMessages } = ChatPrompts.buildMessageHistory(historyMsgs, contextLimit, char, userProfile, emojis);
@@ -269,6 +256,6 @@ export async function buildChatRequestPayload(input: BuildChatPayloadInput): Pro
         systemPrompt,
         cleanedApiMessages,
         fullMessages,
-        flags: { bilingualActive, mcdActive, htmlActive, thinkingActive },
+        flags: { bilingualActive, mcdActive, htmlActive, thinkingActive, commerceActive },
     };
 }

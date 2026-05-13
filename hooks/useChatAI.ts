@@ -24,6 +24,7 @@ import type { DigestResult } from '../utils/memoryPalace';
 import { MCD_PROPOSE_TOOL, autoFixProposalCodesByName } from '../utils/mcdToolBridge';
 import { extractHtmlBlocks } from '../utils/htmlPrompt';
 import { buildChatRequestPayload } from '../utils/chatRequestPayload';
+import { isNuomiCommerceFeatureEnabled } from '../utils/nuomiCommerceFeature';
 import type { CommerceCardPayload, CommerceCardItem, CommerceCardKind } from '../components/commerce/NuomiCommerceMiniApp';
 
 
@@ -2360,10 +2361,12 @@ export const useChatAI = ({
             aiContent = aiContent.replace(/\[\[XHS_POST:.*?\]\]/gs, '').trim();
 
             // 6. Parse Actions (Poke, Transfer, Schedule, Music, etc.)
+            // 购物/外卖功能关闭时，不做任何购物/外卖专属解析或转账拦截，让原版动作链保持原样。
+            const commerceFeatureActive = isNuomiCommerceFeatureEnabled();
             // 外卖代付时，有些模型会沿用原版“转账”动作。这里先拦截，改成外卖支付结果卡片，避免出现转账气泡。
-            const latestPendingDeliveryRequest = findLatestPendingDeliveryRequest(contextMsgs);
+            const latestPendingDeliveryRequest = commerceFeatureActive ? findLatestPendingDeliveryRequest(contextMsgs) : undefined;
             let commercePaymentHandled = false;
-            if (latestPendingDeliveryRequest) {
+            if (commerceFeatureActive && latestPendingDeliveryRequest) {
                 const transferMatchForDelivery = aiContent.match(/\[\[ACTION:TRANSFER:(\d+(?:\.\d+)?)\]\]/);
                 if (transferMatchForDelivery) {
                     const paidCard = createDeliveryPaymentResultCard(
@@ -2479,10 +2482,12 @@ export const useChatAI = ({
                 },
             });
 
-            // 6.2 购物中心 / 外卖自主卡片标签：参考 330 小手机的长期动作指令，不需要额外按钮写入临时提示。
-            const commerceParsed = extractNuomiCommerceActions(aiContent);
+            // 6.2 购物中心 / 外卖自主卡片标签：仅在插件开关开启时解析。
+            const commerceParsed = commerceFeatureActive
+                ? extractNuomiCommerceActions(aiContent)
+                : { cleanText: aiContent, actions: [] as NuomiCommerceAction[] };
             aiContent = commerceParsed.cleanText;
-            if (commerceParsed.actions.length > 0) {
+            if (commerceFeatureActive && commerceParsed.actions.length > 0) {
                 for (const action of commerceParsed.actions.slice(0, 3)) {
                     const actionKind = String(action.kind || action.type || '').trim();
                     const name = String(action.name || action.productInfo || action.itemName || '').trim().slice(0, 60);
@@ -2554,7 +2559,7 @@ export const useChatAI = ({
             }
 
             // 如果模型没有按要求输出内部标签，而是自然写了“已付款/转账/拒绝支付”，也自动转成支付结果卡片。
-            if (!commercePaymentHandled) {
+            if (commerceFeatureActive && !commercePaymentHandled) {
                 const pending = latestPendingDeliveryRequest || findLatestPendingDeliveryRequest(contextMsgs);
                 const decision = pending ? detectDeliveryPaymentDecision(aiContent) : undefined;
                 if (pending && decision) {

@@ -18,6 +18,10 @@ export default defineConfig({
     // 只剥 debugger，保留 console.* —— 部署后按 F12 仍能看到运行时日志，方便排查。
     drop: ['debugger'],
   },
+  optimizeDeps: {
+    // 本地开发只扫描真正入口，避免把更新日志 / saved_resource 等 HTML 当成入口导致红字报错。
+    entries: ['index.html'],
+  },
   server: {
     proxy: {
       '/api/minimax/t2a': {

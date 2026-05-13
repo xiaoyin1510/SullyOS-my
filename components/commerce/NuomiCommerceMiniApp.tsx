@@ -1,6 +1,7 @@
 import React, { useEffect, useMemo, useState } from 'react';
 import { X, Sparkle, ShoppingCartSimple, Plus, Minus, Trash, Receipt, Gift, PaperPlaneTilt, Storefront, BowlFood, ArrowsClockwise } from '@phosphor-icons/react';
 import { APIConfig, CharacterProfile, Message, UserProfile } from '../../types';
+import { NUOMI_COMMERCE_FEATURE_EVENT, isNuomiCommerceFeatureEnabled, setNuomiCommerceFeatureEnabled } from '../../utils/nuomiCommerceFeature';
 
 export type CommerceMode = 'shopping' | 'delivery';
 type ProductSource = 'default' | 'manual' | 'ai';
@@ -24,11 +25,11 @@ type DirectForm = { name: string; amount: string; note: string };
 
 const STORAGE_VERSION = 5;
 const AI_KEY = `nuomi_commerce_ai_settings_v${STORAGE_VERSION}`;
-const blankProductForm: ProductFormState = { name: '', category: '', price: '', emoji: '🎁', image: '' };
+const blankProductForm: ProductFormState = { name: '', category: '', price: '', description: '', emoji: '🎁', image: '' };
 const blankDirect: DirectForm = { name: '', amount: '', note: '' };
 
 const defaultProducts: Product[] = [
-    { id: 'plush-phone-charm', name: '小手机毛绒挂件', category: '可爱小物', price: 19.9, description: '软乎乎的手机挂件，适合挂在角色的小手机旁边。', emoji: '🧸', source: 'default' },
+    { id: 'plush-phone-charm', name: '毛绒手机挂件', category: '可爱小物', price: 19.9, description: '软乎乎的手机挂件，适合挂在角色手机旁边。', emoji: '🧸', source: 'default' },
     { id: 'chat-energy-box', name: '聊天能量补给盒', category: '零食饮料', price: 36, description: '巧克力、饼干和小饮料的组合，适合深夜聊天。', emoji: '🍫', source: 'default' },
     { id: 'memory-notebook', name: '记忆手账本', category: '生活用品', price: 28, description: '可以记录约定、日程、灵感和聊天里的小细节。', emoji: '📔', source: 'default' },
     { id: 'tiny-flower', name: '迷你花束', category: '礼物', price: 45, description: '一束小小的花，适合当作突然的惊喜。', emoji: '💐', source: 'default' },
@@ -99,7 +100,7 @@ async function aiRestock(ai: AiSettings, char?: CharacterProfile | null, recentM
     if (!root || !ai.apiKey || !ai.model) throw new Error('请先设置 URL、API Key，并拉取/选择模型');
     const existing = existingProducts.slice(0, 160).map(p => `${p.category}/${p.name}/${p.price}`).join('；');
     const contextCount = Math.max(0, Math.min(100, Number(ai.contextMessageCount ?? 18)));
-    const prompt = `请根据角色人设、已挂载世界书、最近聊天上下文和当前关系，为“小手机购物中心”补货。\n\n角色资料：\n${charText(char)}\n\n最近聊天（最近 ${contextCount} 条，每条最多 180 字）：\n${messagesText(recentMessages, contextCount) || '不参考聊天记录'}\n\n现有分类：${existingCategories.filter(c => c !== '全部').join('、') || '暂无'}\n现有商品（避免重复）：${existing || '暂无'}\n\n参考 330 小手机的补货思路：商品和分类要深度绑定角色性格、世界书设定、生活习惯、情绪、关系进展和最近对话；它们应该像角色会真正感兴趣、购买、制作、想收到或想送出的东西。不要参考“神经链接/记忆宫殿”的按天或按月记忆。\n\n只输出严格 JSON 数组。每个商品对象字段：name、category、price、description、emoji。description 表示“详情页”内容，要让角色看得懂商品用途和气氛。不要输出款式 variations，不要输出商品备注 note。`;
+    const prompt = `请根据角色人设、已挂载世界书、最近聊天上下文和当前关系，为“购物中心”补货。\n\n角色资料：\n${charText(char)}\n\n最近聊天（最近 ${contextCount} 条，每条最多 180 字）：\n${messagesText(recentMessages, contextCount) || '不参考聊天记录'}\n\n现有分类：${existingCategories.filter(c => c !== '全部').join('、') || '暂无'}\n现有商品（避免重复）：${existing || '暂无'}\n\n补货要求：商品和分类要深度绑定角色性格、世界书设定、生活习惯、情绪、关系进展和最近对话；它们应该像角色会真正感兴趣、购买、制作、想收到或想送出的东西。不要参考“神经链接/记忆宫殿”的按天或按月记忆。\n\n只输出严格 JSON 数组。每个商品对象字段：name、category、price、description、emoji。description 表示“详情页”内容，要让角色看得懂商品用途和气氛。不要输出款式 variations，不要输出商品备注 note。`;
     const res = await fetch(`${root}/chat/completions`, { method: 'POST', headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${ai.apiKey}` }, body: JSON.stringify({ model: ai.model, messages: [{ role: 'system', content: '你是购物中心补货助手，只输出 JSON 数组，不输出解释。' }, { role: 'user', content: prompt }], temperature: 0.85 }) });
     if (!res.ok) throw new Error(`API 请求失败：${res.status}`);
     const data = await res.json();
@@ -151,6 +152,11 @@ function Cart({ products, cart, title, onInc, onDec, onClear }: { products: Prod
     return <aside className="rounded-[28px] border border-slate-100 bg-white shadow-sm p-3 min-h-[210px] flex flex-col"><div className="flex items-center justify-between mb-3"><div className="font-black text-slate-800 flex items-center gap-1.5"><ShoppingCartSimple className="w-4 h-4" weight="bold" />{title}</div>{cart.length > 0 && <button type="button" onClick={onClear} className="text-[11px] font-bold text-slate-400 flex items-center gap-1"><Trash className="w-3.5 h-3.5" />清空</button>}</div>{sum.lines.length === 0 ? <div className="h-28 rounded-2xl border border-dashed border-slate-200 bg-white/50 flex items-center justify-center text-xs font-bold text-slate-400">还没有选择</div> : <div className="space-y-2 max-h-52 overflow-y-auto pr-1">{sum.lines.map((l) => <div key={`${l.product.id}-${l.variation?.id || 'default'}`} className="rounded-2xl bg-slate-50 p-2.5"><div className="flex justify-between gap-2"><div className="min-w-0"><div className="text-xs font-black text-slate-700 truncate">{l.product.emoji || '🎁'} {l.label}</div><div className="text-[11px] font-bold text-slate-400">{money(l.price)} / 件</div></div><div className="text-xs font-black text-pink-500">{money(l.subtotal)}</div></div><div className="flex justify-end items-center gap-2 mt-2"><button type="button" onClick={() => onDec({ productId: l.product.id, variationId: l.variation?.id, qty: l.qty })} className="w-7 h-7 rounded-full bg-white border border-slate-200 flex items-center justify-center"><Minus className="w-3.5 h-3.5" /></button><span className="w-6 text-center text-xs font-black">{l.qty}</span><button type="button" onClick={() => onInc({ productId: l.product.id, variationId: l.variation?.id, qty: l.qty })} className="w-7 h-7 rounded-full bg-slate-900 text-white flex items-center justify-center"><Plus className="w-3.5 h-3.5" /></button></div></div>)}</div>}<div className="mt-auto pt-4 flex items-center justify-between border-t border-slate-100"><span className="text-xs font-bold text-slate-400">合计</span><strong className="text-xl text-slate-900">{money(sum.total)}</strong></div></aside>;
 }
 
+function CommerceToast({ message, leaving, className = '' }: { message: string; leaving: boolean; className?: string }) {
+    return <div className={`${className} rounded-2xl bg-slate-900 text-white px-3 py-2 text-xs font-bold transition-all duration-500 ease-out ${leaving ? 'opacity-0 -translate-y-1' : 'opacity-100 translate-y-0'}`}>{message}</div>;
+}
+
+
 export default function NuomiCommerceMiniApp({ open, initialMode = 'shopping', onClose, char, userProfile, apiConfig, recentMessages, onSendToChat }: Props) {
     const [tab, setTab] = useState<CommerceMode>(initialMode);
     const [products, setProducts] = useState<Product[]>(() => read('shopping', char?.id) || defaultProducts);
@@ -165,6 +171,7 @@ export default function NuomiCommerceMiniApp({ open, initialMode = 'shopping', o
     const [note, setNote] = useState('');
     const [deliveryNote, setDeliveryNote] = useState('');
     const [toast, setToast] = useState<string | null>(null);
+    const [toastLeaving, setToastLeaving] = useState(false);
     const [manage, setManage] = useState(false);
     const [checked, setChecked] = useState<Record<string, boolean>>({});
     const [checkedDelivery, setCheckedDelivery] = useState<Record<string, boolean>>({});
@@ -174,6 +181,7 @@ export default function NuomiCommerceMiniApp({ open, initialMode = 'shopping', o
     const [categoryDraft, setCategoryDraft] = useState('');
     const [apiOpen, setApiOpen] = useState(false);
     const [dataOpen, setDataOpen] = useState(false);
+    const [featureEnabled, setFeatureEnabled] = useState(() => isNuomiCommerceFeatureEnabled());
     const [ai, setAi] = useState<AiSettings>(() => readAi(apiConfig));
     const [loadingAi, setLoadingAi] = useState(false);
     const [directShop, setDirectShop] = useState<DirectForm>(blankDirect);
@@ -181,7 +189,24 @@ export default function NuomiCommerceMiniApp({ open, initialMode = 'shopping', o
     const actor = userProfile?.name || '我';
     const charName = char?.name || 'TA';
 
-    useEffect(() => { if (open) { setTab(initialMode); setToast(null); setProducts(read('shopping', char?.id) || defaultProducts); setDelivery(read('delivery', char?.id) || defaultDelivery); setShoppingCustomCats(readCats('shopping', char?.id)); setDeliveryCustomCats(readCats('delivery', char?.id)); } }, [open, initialMode, char?.id]);
+    useEffect(() => { if (open) { setTab(initialMode); setToast(null); setToastLeaving(false); setProducts(read('shopping', char?.id) || defaultProducts); setDelivery(read('delivery', char?.id) || defaultDelivery); setShoppingCustomCats(readCats('shopping', char?.id)); setDeliveryCustomCats(readCats('delivery', char?.id)); setFeatureEnabled(isNuomiCommerceFeatureEnabled()); } }, [open, initialMode, char?.id]);
+    useEffect(() => {
+        if (!toast) return;
+        setToastLeaving(false);
+        const fadeTimer = window.setTimeout(() => setToastLeaving(true), 3000);
+        const clearTimer = window.setTimeout(() => setToast(null), 3600);
+        return () => { window.clearTimeout(fadeTimer); window.clearTimeout(clearTimer); };
+    }, [toast]);
+    useEffect(() => {
+        if (!open || typeof window === 'undefined') return;
+        const sync = () => setFeatureEnabled(isNuomiCommerceFeatureEnabled());
+        window.addEventListener(NUOMI_COMMERCE_FEATURE_EVENT, sync as EventListener);
+        window.addEventListener('storage', sync);
+        return () => {
+            window.removeEventListener(NUOMI_COMMERCE_FEATURE_EVENT, sync as EventListener);
+            window.removeEventListener('storage', sync);
+        };
+    }, [open]);
     useEffect(() => write('shopping', char?.id, products), [products, char?.id]);
     useEffect(() => write('delivery', char?.id, delivery), [delivery, char?.id]);
     useEffect(() => writeCats('shopping', char?.id, shoppingCustomCats), [shoppingCustomCats, char?.id]);
@@ -221,6 +246,12 @@ export default function NuomiCommerceMiniApp({ open, initialMode = 'shopping', o
         return { version: 2, id: id('commerce-card'), kind, title: titles[kind], mode, actorName: kind.startsWith('char_') ? charName : actor, targetName: kind.startsWith('char_') ? actor : charName, charName, userName: actor, items, total, note: orderNote, status, createdAt: Date.now(), aiPrompt: makePrompt(kind, items, total, orderNote) };
     };
     const sendCard = async (c: CommerceCardPayload, role: 'user' | 'assistant' = 'user', msg = '卡片已发送') => onSendToChat?.({ card: c, role, triggerAI: false, toast: msg, metadata: { commerceCard: c } });
+    const toggleFeature = () => {
+        const next = !featureEnabled;
+        setNuomiCommerceFeatureEnabled(next);
+        setFeatureEnabled(next);
+        setToast(next ? '购物中心已打开' : '购物中心已关闭');
+    };
 
     const checkout = async (gift: boolean) => { if (!ssum.lines.length) return setToast('请先选择商品'); const c = card(gift ? 'shopping_gift' : 'shopping_receipt', 'shopping', cardItems(ssum), ssum.total, note); await sendCard(c, 'user', gift ? '礼物卡片已发送' : '小票卡片已发送'); setCart([]); setNote(''); setToast(gift ? '已送给TA；需要TA回应时，请点聊天窗右上角原版触发AI' : '小票已弹出卡片'); onClose(); };
     const deliveryItems = (): CommerceCardItem[] => cardItems(dsum).map(i => ({ ...i, description: undefined }));
@@ -332,8 +363,8 @@ export default function NuomiCommerceMiniApp({ open, initialMode = 'shopping', o
 
     return <div className="fixed inset-0 z-[70] bg-slate-900/35 backdrop-blur-sm flex items-end sm:items-center justify-center p-0 sm:p-3" onMouseDown={onClose}>
         <section className="w-full sm:max-w-[980px] h-[100dvh] sm:h-[800px] sm:max-h-[92vh] rounded-none sm:rounded-[34px] bg-[#f8fafc] border border-white/70 shadow-2xl overflow-hidden flex flex-col" onMouseDown={e => e.stopPropagation()}>
-            <header className="px-4 py-3 bg-white/95 border-b border-slate-100 flex items-center justify-between gap-3 shrink-0 relative z-10"><div className="flex items-center gap-2 min-w-0"><div className="w-10 h-10 rounded-2xl bg-gradient-to-br from-pink-100 to-orange-100 text-pink-500 flex items-center justify-center shadow-sm">{tab === 'shopping' ? <Storefront className="w-5 h-5" weight="fill" /> : <BowlFood className="w-5 h-5" weight="fill" />}</div><div><h2 className="text-base font-black text-slate-900">购物中心</h2></div></div><div className="flex items-center gap-2"><div className="p-1 rounded-2xl bg-slate-100 flex gap-1"><button onClick={() => setTab('shopping')} className={`h-8 px-3 rounded-xl text-xs font-black ${tab === 'shopping' ? 'bg-white text-pink-500 shadow-sm' : 'text-slate-400'}`}>购物</button><button onClick={() => setTab('delivery')} className={`h-8 px-3 rounded-xl text-xs font-black ${tab === 'delivery' ? 'bg-white text-orange-500 shadow-sm' : 'text-slate-400'}`}>外卖</button></div><button onClick={onClose} className="w-9 h-9 rounded-full bg-slate-100 text-slate-500 flex items-center justify-center"><X className="w-5 h-5" /></button></div></header>
-            {toast && <div className="mx-4 mt-3 rounded-2xl bg-slate-900 text-white px-3 py-2 text-xs font-bold shrink-0">{toast}</div>}
+            <header className="px-4 py-3 bg-white/95 border-b border-slate-100 flex items-center justify-between gap-3 shrink-0 relative z-10"><div className="flex items-center gap-2 min-w-0"><div className="w-10 h-10 rounded-2xl bg-gradient-to-br from-pink-100 to-orange-100 text-pink-500 flex items-center justify-center shadow-sm">{tab === 'shopping' ? <Storefront className="w-5 h-5" weight="fill" /> : <BowlFood className="w-5 h-5" weight="fill" />}</div><div className="flex items-center gap-2 min-w-0"><h2 className="text-base font-black text-slate-900 whitespace-nowrap">购物中心</h2><button onClick={toggleFeature} className={`h-8 px-3 rounded-xl text-sm font-black border shrink-0 transition-colors ${featureEnabled ? 'bg-pink-50 text-pink-500 border-pink-200' : 'bg-white text-slate-500 border-slate-200'}`}>{featureEnabled ? '开' : '关'}</button></div></div><div className="flex items-center gap-2"><div className="p-1 rounded-2xl bg-slate-100 flex gap-1"><button onClick={() => setTab('shopping')} className={`h-8 px-3 rounded-xl text-xs font-black ${tab === 'shopping' ? 'bg-white text-pink-500 shadow-sm' : 'text-slate-400'}`}>购物</button><button onClick={() => setTab('delivery')} className={`h-8 px-3 rounded-xl text-xs font-black ${tab === 'delivery' ? 'bg-white text-orange-500 shadow-sm' : 'text-slate-400'}`}>外卖</button></div><button onClick={onClose} className="w-9 h-9 rounded-full bg-slate-100 text-slate-500 flex items-center justify-center"><X className="w-5 h-5" /></button></div></header>
+            {toast && <CommerceToast message={toast} leaving={toastLeaving} className="mx-4 mt-3 shrink-0" />}
             <div className="p-3 sm:p-4 flex-1 min-h-0 overflow-y-auto block lg:grid lg:grid-cols-[1fr_310px] lg:gap-4 space-y-4 lg:space-y-0 overscroll-contain">
                 <main className="flex flex-col gap-3 overflow-visible"><div className="flex flex-wrap sm:flex-nowrap gap-2 overflow-visible sm:overflow-x-auto pb-1 shrink-0">{activeCats.map(c => <button key={c} onClick={() => setActiveCat(c)} className={`h-8 px-3 rounded-full text-xs font-black whitespace-nowrap border ${activeCat === c ? 'bg-slate-900 text-white border-slate-900' : 'bg-white/80 text-slate-500 border-slate-100'}`}>{c}</button>)}<button onClick={() => openCategorySheet(tab)} className="h-8 px-3 rounded-full text-xs font-black whitespace-nowrap bg-white text-pink-500 border border-pink-100">＋分类</button>{tab === 'shopping' && <button onClick={() => setApiOpen(true)} className="h-8 px-3 rounded-full text-xs font-black whitespace-nowrap bg-white text-slate-500 border border-slate-100">⚙ API</button>}{tab === 'shopping' && <button onClick={() => setDataOpen(true)} className="h-8 px-3 rounded-full text-xs font-black whitespace-nowrap bg-white text-slate-500 border border-slate-100">数据</button>}{tab === 'shopping' && <button onClick={doAi} disabled={loadingAi} className="h-8 px-3 rounded-full text-xs font-black whitespace-nowrap bg-pink-50 text-pink-500 border border-pink-100 flex items-center gap-1">{loadingAi ? <ArrowsClockwise className="w-3.5 h-3.5 animate-spin" /> : <Sparkle className="w-3.5 h-3.5" weight="fill" />}AI补货</button>}<button onClick={() => setManage(v => !v)} className="h-8 px-3 rounded-full text-xs font-black whitespace-nowrap bg-white text-slate-500 border border-slate-100">{manage ? '完成管理' : '管理'}</button></div>
                     {manage && <div className="flex flex-wrap sm:flex-nowrap gap-2 overflow-visible sm:overflow-x-auto pb-1"><button onClick={() => remove(tab, Object.keys(activeChecked).filter(k => activeChecked[k]))} className="h-8 px-3 rounded-full bg-rose-50 text-rose-500 border border-rose-100 text-xs font-black whitespace-nowrap">删除选中</button><button onClick={() => removeCat(tab, activeCat)} className="h-8 px-3 rounded-full bg-rose-50 text-rose-500 border border-rose-100 text-xs font-black whitespace-nowrap">删除当前分类</button></div>}
@@ -391,6 +422,14 @@ function ApiSheet({ ai, setAi, onClose }: { ai: AiSettings; setAi: React.Dispatc
     const [draft, setDraft] = useState<AiSettings>(ai);
     const [selectedPresetId, setSelectedPresetId] = useState('');
     const [status, setStatus] = useState<string | null>(null);
+    const [statusLeaving, setStatusLeaving] = useState(false);
+    useEffect(() => {
+        if (!status) return;
+        setStatusLeaving(false);
+        const fadeTimer = window.setTimeout(() => setStatusLeaving(true), 3000);
+        const clearTimer = window.setTimeout(() => setStatus(null), 3600);
+        return () => { window.clearTimeout(fadeTimer); window.clearTimeout(clearTimer); };
+    }, [status]);
     const applyPreset = (presetId: string) => {
         setSelectedPresetId(presetId);
         const p = draft.presets.find(x => x.id === presetId);
@@ -424,5 +463,5 @@ function ApiSheet({ ai, setAi, onClose }: { ai: AiSettings; setAi: React.Dispatc
             setStatus(e?.message || '拉取模型失败');
         }
     };
-    return <div className="fixed inset-0 z-[80] bg-slate-900/45 flex items-end sm:items-center justify-center p-0 sm:p-4" onMouseDown={onClose}><div className="w-full sm:max-w-lg max-h-[90dvh] overflow-y-auto rounded-t-[30px] sm:rounded-[30px] bg-white p-4 shadow-2xl" onMouseDown={e => e.stopPropagation()}><div className="flex justify-between items-center mb-3"><h3 className="font-black text-slate-900">购物中心 AI 补货 API</h3><button onClick={onClose} className="w-9 h-9 rounded-full bg-slate-100 text-slate-500 flex items-center justify-center"><X className="w-5 h-5" /></button></div>{status && <div className="mb-3 rounded-2xl bg-slate-900 text-white px-3 py-2 text-xs font-bold">{status}</div>}<div className="space-y-3"><div className="grid grid-cols-1 sm:grid-cols-[1fr_auto] gap-2"><Field label="预设"><select value={selectedPresetId} onChange={e => applyPreset(e.target.value)} className={inputClass}><option value="">选择预设</option>{draft.presets.map(p => <option key={p.id} value={p.id}>{p.name}</option>)}</select></Field><button onClick={deletePreset} disabled={!selectedPresetId} className="h-10 sm:self-end px-3 rounded-2xl bg-rose-50 text-rose-500 border border-rose-100 text-xs font-black disabled:opacity-40 whitespace-nowrap">删除预设</button></div><Field label="URL"><input value={draft.baseUrl} onChange={e => setDraft(s => ({ ...s, baseUrl: e.target.value }))} className={inputClass} placeholder="例如：https://api.openai.com/v1" /></Field><Field label="API Key"><input value={draft.apiKey} onChange={e => setDraft(s => ({ ...s, apiKey: e.target.value }))} className={inputClass} placeholder="sk-..." /></Field><div className="grid grid-cols-1 sm:grid-cols-[1fr_auto] gap-2"><Field label="模型"><select value={draft.model} onChange={e => setDraft(s => ({ ...s, model: e.target.value }))} className={inputClass}><option value="">请选择模型</option>{draft.models.map(m => <option key={m} value={m}>{m}</option>)}{draft.model && !draft.models.includes(draft.model) && <option value={draft.model}>{draft.model}</option>}</select></Field><button onClick={doPull} className="h-10 sm:self-end px-3 rounded-2xl bg-pink-50 text-pink-500 border border-pink-100 text-xs font-black whitespace-nowrap">拉取模型</button></div><Field label="预设名称"><input value={draft.presetName} onChange={e => setDraft(s => ({ ...s, presetName: e.target.value }))} className={inputClass} placeholder="例如：补货API" /></Field><Field label={`AI 补货参考最近聊天：${draft.contextMessageCount} 条`} hint="范围 0-100；每条最多读取 180 字。0 表示不参考聊天记录，只参考人设、世界书、分类和已有商品。"><input type="range" min={0} max={100} step={1} value={draft.contextMessageCount} onChange={e => setDraft(s => ({ ...s, contextMessageCount: Number(e.target.value) }))} className="w-full" /></Field><div className="grid grid-cols-2 gap-2"><button onClick={saveCurrent} className="h-11 rounded-2xl bg-slate-900 text-white text-xs font-black">保存</button><button onClick={savePreset} className="h-11 rounded-2xl bg-pink-50 text-pink-500 border border-pink-100 text-xs font-black">保存预设</button></div><p className="text-[11px] text-slate-400 leading-relaxed">填写内容不会自动保存；只有点击“保存”或“保存预设”后才会写入本地。</p></div></div></div>;
+    return <div className="fixed inset-0 z-[80] bg-slate-900/45 flex items-end sm:items-center justify-center p-0 sm:p-4" onMouseDown={onClose}><div className="w-full sm:max-w-lg max-h-[90dvh] overflow-y-auto rounded-t-[30px] sm:rounded-[30px] bg-white p-4 shadow-2xl" onMouseDown={e => e.stopPropagation()}><div className="flex justify-between items-center mb-3"><h3 className="font-black text-slate-900">购物中心 AI 补货 API</h3><button onClick={onClose} className="w-9 h-9 rounded-full bg-slate-100 text-slate-500 flex items-center justify-center"><X className="w-5 h-5" /></button></div>{status && <CommerceToast message={status} leaving={statusLeaving} className="mb-3" />}<div className="space-y-3"><div className="grid grid-cols-1 sm:grid-cols-[1fr_auto] gap-2"><Field label="预设"><select value={selectedPresetId} onChange={e => applyPreset(e.target.value)} className={inputClass}><option value="">选择预设</option>{draft.presets.map(p => <option key={p.id} value={p.id}>{p.name}</option>)}</select></Field><button onClick={deletePreset} disabled={!selectedPresetId} className="h-10 sm:self-end px-3 rounded-2xl bg-rose-50 text-rose-500 border border-rose-100 text-xs font-black disabled:opacity-40 whitespace-nowrap">删除预设</button></div><Field label="URL"><input value={draft.baseUrl} onChange={e => setDraft(s => ({ ...s, baseUrl: e.target.value }))} className={inputClass} placeholder="例如：https://api.openai.com/v1" /></Field><Field label="API Key"><input value={draft.apiKey} onChange={e => setDraft(s => ({ ...s, apiKey: e.target.value }))} className={inputClass} placeholder="sk-..." /></Field><div className="grid grid-cols-1 sm:grid-cols-[1fr_auto] gap-2"><Field label="模型"><select value={draft.model} onChange={e => setDraft(s => ({ ...s, model: e.target.value }))} className={inputClass}><option value="">请选择模型</option>{draft.models.map(m => <option key={m} value={m}>{m}</option>)}{draft.model && !draft.models.includes(draft.model) && <option value={draft.model}>{draft.model}</option>}</select></Field><button onClick={doPull} className="h-10 sm:self-end px-3 rounded-2xl bg-pink-50 text-pink-500 border border-pink-100 text-xs font-black whitespace-nowrap">拉取模型</button></div><Field label="预设名称"><input value={draft.presetName} onChange={e => setDraft(s => ({ ...s, presetName: e.target.value }))} className={inputClass} placeholder="例如：补货API" /></Field><Field label={`AI 补货参考最近聊天：${draft.contextMessageCount} 条`} hint="范围 0-100；每条最多读取 180 字。0 表示不参考聊天记录，只参考人设、世界书、分类和已有商品。"><input type="range" min={0} max={100} step={1} value={draft.contextMessageCount} onChange={e => setDraft(s => ({ ...s, contextMessageCount: Number(e.target.value) }))} className="w-full" /></Field><div className="grid grid-cols-2 gap-2"><button onClick={saveCurrent} className="h-11 rounded-2xl bg-slate-900 text-white text-xs font-black">保存</button><button onClick={savePreset} className="h-11 rounded-2xl bg-pink-50 text-pink-500 border border-pink-100 text-xs font-black">保存预设</button></div><p className="text-[11px] text-slate-400 leading-relaxed">填写内容不会自动保存；只有点击“保存”或“保存预设”后才会写入本地。</p></div></div></div>;
 }

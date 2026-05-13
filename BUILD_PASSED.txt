@@ -1,1 +1,5 @@
-Build passed on v4: npm install && npm run build
+v17 build passed
+
+- 购物中心内部提示显示约 3 秒后淡出消失。
+- 只改 components/commerce/NuomiCommerceMiniApp.tsx 里的购物中心本地提示显示，不改原版全局 toast。
+- npm run build 已通过。

@@ -2441,7 +2441,7 @@ const Chat: React.FC = () => {
 
             {/* 情绪设置已嵌入日程 Modal（与日程强制同步开/关），不再单独渲染 */}
 
-            {/* 🛒 购物中心 / 外卖小程序 - 独立插件化入口，参考 330 小手机功能 */}
+            {/* 🛒 购物中心 / 外卖小程序 - 独立插件化入口 */}
             <NuomiCommerceMiniApp
                 open={commerceAppOpen !== null}
                 initialMode={commerceAppOpen || 'shopping'}
