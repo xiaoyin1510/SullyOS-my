@@ -132,9 +132,11 @@ ${messagesText(recentMessages, contextCount) || '不参考聊天记录'}
 
 分类要求：${categoryRule}
 
-补货要求：商品和分类要深度绑定角色性格、世界书设定、生活习惯、情绪、关系进展和最近对话；它们应该像角色会真正感兴趣、购买、制作、想收到或想送出的东西。不要替换已有商品，不要重复现有商品或只换一个名字。不要参考“神经链接/记忆宫殿”的按天或按月记忆。
+补货选品要求：商品和分类可以参考角色性格、世界书设定、生活习惯、情绪、关系进展和最近对话来决定“适合补什么货”；它们应该像角色会真正感兴趣、购买、制作、想收到或想送出的东西。不要替换已有商品，不要重复现有商品或只换一个名字。不要参考“神经链接/记忆宫殿”的按天或按月记忆。
 
-只输出严格 JSON 数组。每个商品对象字段：name、category、price、description、emoji。description 表示“详情页”内容，要让角色看得懂商品用途和气氛。不要输出款式 variations，不要输出商品备注 note。`;
+详情页文案要求：description 必须是正常商家/平台视角的商品详情页文案，只描述商品本身的功能、材质、口味、卖点、使用场景或搭配建议；禁止使用角色第一人称或第二人称代入，禁止写“给你/给TA/陪你/你现在/她喜欢/他记得/聊天里/记忆里/关系里”等像角色根据记忆说话的句子。可以让商品选择贴合角色，但详情页文案必须像普通购物平台的商品介绍。
+
+只输出严格 JSON 数组。每个商品对象字段：name、category、price、description、emoji。description 表示“详情页”内容，写给普通顾客看的商家商品介绍。不要输出款式 variations，不要输出商品备注 note。`;
     const res = await fetch(`${root}/chat/completions`, { method: 'POST', headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${ai.apiKey}` }, body: JSON.stringify({ model: ai.model, messages: [{ role: 'system', content: '你是购物中心补货助手，只输出 JSON 数组，不输出解释。' }, { role: 'user', content: prompt }], temperature: 0.85 }) });
     if (!res.ok) throw new Error(`API 请求失败：${res.status}`);
     const data = await res.json();
@@ -148,7 +150,7 @@ ${messagesText(recentMessages, contextCount) || '不参考聊天记录'}
             name: String(x.name || `${modeLabel}商品${i + 1}`).slice(0, 32),
             category: categoryName,
             price,
-            description: String(x.description || '根据角色状态补充的商品。').slice(0, 260),
+            description: String(x.description || '商品详情待补充。').replace(/(给你|给TA|陪你|你现在|聊天里|记忆里|她喜欢|他喜欢|关系里)/g, '').slice(0, 360),
             emoji: String(x.emoji || (mode === 'delivery' ? '🥡' : '🎁')).slice(0, 4),
             source: 'ai'
         };
@@ -178,17 +180,77 @@ function AddProductCard({ mode, category, onAdd }: { mode: CommerceMode; categor
         <span className="hidden sm:block px-3 text-[11px] font-bold text-slate-400 text-center">{label}</span>
     </button>;
 }
-function ProductCard({ mode, product, checked, manage, selected, onCheck, onPick, onAdd, onDelete }: { mode: CommerceMode; product: Product; checked?: boolean; manage?: boolean; selected?: boolean; onCheck: () => void; onPick: () => void; onAdd: () => void; onDelete: () => void }) {
-    return <article className={`relative rounded-2xl sm:rounded-3xl border p-1.5 sm:p-3 bg-white shadow-sm ${selected ? 'border-pink-300 ring-2 ring-pink-100' : 'border-slate-100'}`}>
+function ProductCard({ mode, product, checked, manage, selected, onCheck, onPick, onShowDetail, onAdd, onDelete }: { mode: CommerceMode; product: Product; checked?: boolean; manage?: boolean; selected?: boolean; onCheck: () => void; onPick: () => void; onShowDetail: () => void; onAdd: () => void; onDelete: () => void }) {
+    const longPressTimer = React.useRef<number | null>(null);
+    const clearLongPress = () => {
+        if (longPressTimer.current != null) {
+            window.clearTimeout(longPressTimer.current);
+            longPressTimer.current = null;
+        }
+    };
+    const startLongPress = () => {
+        clearLongPress();
+        longPressTimer.current = window.setTimeout(() => {
+            longPressTimer.current = null;
+            onShowDetail();
+        }, 520);
+    };
+    return <article
+        className={`relative rounded-2xl sm:rounded-3xl border p-1.5 sm:p-3 bg-white shadow-sm ${selected ? 'border-pink-300 ring-2 ring-pink-100' : 'border-slate-100'}`}
+        onContextMenu={(e) => { e.preventDefault(); onShowDetail(); }}
+        title="长按查看完整详情页"
+    >
         {manage && <button type="button" onClick={onCheck} className={`absolute left-1 top-1 sm:left-2 sm:top-2 z-10 w-6 h-6 sm:w-7 sm:h-7 rounded-full border text-[10px] sm:text-xs font-black ${checked ? 'bg-slate-900 text-white border-slate-900' : 'bg-white text-slate-300 border-slate-200'}`}>{checked ? '✓' : ''}</button>}
-        <button type="button" onClick={onPick} className="w-full text-left">
+        <button
+            type="button"
+            onClick={onPick}
+            onPointerDown={startLongPress}
+            onPointerUp={clearLongPress}
+            onPointerLeave={clearLongPress}
+            onPointerCancel={clearLongPress}
+            className="w-full text-left"
+        >
             <div className="aspect-[4/3] sm:aspect-[4/3] rounded-xl sm:rounded-2xl bg-gradient-to-br from-pink-50 to-orange-50 flex items-center justify-center overflow-hidden mb-1.5 sm:mb-3">{product.image ? <img src={product.image} alt="" className="w-full h-full object-cover" /> : <span className="text-xl sm:text-4xl">{product.emoji || '🎁'}</span>}</div>
             <div className="min-w-0"><h4 className="text-[10px] sm:text-sm font-black text-slate-800 leading-tight line-clamp-2 min-h-[22px] sm:min-h-0">{product.name}</h4><p className="block text-[9px] sm:text-[11px] text-slate-400 font-bold mt-0.5 truncate">{product.category}</p></div>
             <strong className="mt-0.5 sm:mt-1 block text-[11px] sm:text-sm text-pink-500 shrink-0">{money(product.price)}</strong>
-            {mode === 'shopping' && product.description && <p className="line-clamp-2 text-[9px] sm:text-[12px] text-slate-500 leading-snug sm:leading-relaxed mt-1 sm:mt-2 min-h-[22px] sm:min-h-0">{product.description}</p>}
+            {product.description && <p className="line-clamp-2 text-[9px] sm:text-[12px] text-slate-500 leading-snug sm:leading-relaxed mt-1 sm:mt-2 min-h-[22px] sm:min-h-0">{product.description}</p>}
         </button>
         <div className="mt-1.5 sm:mt-3 grid grid-cols-[1fr_auto] gap-1 sm:gap-2"><button type="button" onClick={onAdd} className="h-7 sm:h-9 rounded-xl sm:rounded-2xl bg-slate-900 text-white text-[10px] sm:text-xs font-black active:scale-95 flex items-center justify-center gap-0.5 sm:gap-1"><Plus className="w-3.5 h-3.5 sm:w-4 sm:h-4" weight="bold" /><span>加入</span></button><button type="button" onClick={onDelete} className="h-7 w-7 sm:h-9 sm:w-9 rounded-xl sm:rounded-2xl bg-slate-50 border border-slate-100 text-slate-400 flex items-center justify-center"><Trash className="w-3.5 h-3.5 sm:w-4 sm:h-4" /></button></div>
     </article>;
+}
+
+function ProductDetailSheet({ product, onClose }: { product: Product; onClose: () => void }) {
+    return <div className="fixed inset-0 z-[90] bg-slate-900/45 flex items-end sm:items-center justify-center p-0 sm:p-4" onMouseDown={onClose}>
+        <div className="w-full sm:max-w-md max-h-[86dvh] rounded-t-[30px] sm:rounded-[30px] bg-white shadow-2xl overflow-hidden flex flex-col" onMouseDown={e => e.stopPropagation()}>
+            <div className="p-4 border-b border-slate-100 flex items-center justify-between gap-3 shrink-0">
+                <div className="min-w-0">
+                    <div className="text-[11px] font-black text-slate-400 truncate">{product.category}</div>
+                    <h3 className="font-black text-slate-900 text-base leading-tight truncate">{product.name}</h3>
+                </div>
+                <button onClick={onClose} className="w-9 h-9 rounded-full bg-slate-100 text-slate-500 flex items-center justify-center shrink-0"><X className="w-5 h-5" /></button>
+            </div>
+            <div className="p-4 overflow-y-auto space-y-4">
+                <div className="rounded-[26px] bg-gradient-to-br from-pink-50 to-orange-50 min-h-[160px] flex items-center justify-center overflow-hidden">
+                    {product.image ? <img src={product.image} alt="" className="w-full h-full object-cover" /> : <span className="text-6xl">{product.emoji || '🎁'}</span>}
+                </div>
+                <div className="flex items-start justify-between gap-3">
+                    <div className="min-w-0">
+                        <h4 className="text-lg font-black text-slate-900 leading-tight">{product.name}</h4>
+                        <div className="mt-1 text-xs font-bold text-slate-400">{product.category}</div>
+                    </div>
+                    <div className="text-xl font-black text-pink-500 shrink-0">{money(product.price)}</div>
+                </div>
+                <div>
+                    <div className="mb-2 text-[12px] font-black text-slate-500">商品详情页</div>
+                    <div className="rounded-2xl bg-slate-50 border border-slate-100 p-3 text-sm leading-relaxed text-slate-600 whitespace-pre-wrap">{product.description || '暂无详情。'}</div>
+                </div>
+                {product.note && <div>
+                    <div className="mb-2 text-[12px] font-black text-slate-500">备注</div>
+                    <div className="rounded-2xl bg-amber-50 border border-amber-100 p-3 text-sm leading-relaxed text-amber-700 whitespace-pre-wrap">{product.note}</div>
+                </div>}
+            </div>
+        </div>
+    </div>;
 }
 function Cart({ products, cart, title, onInc, onDec, onClear }: { products: Product[]; cart: CartLine[]; title: string; onInc: (l: CartLine) => void; onDec: (l: CartLine) => void; onClear: () => void }) {
     const sum = summary(products, cart);
@@ -229,6 +291,7 @@ export default function NuomiCommerceMiniApp({ open, initialMode = 'shopping', o
     const [loadingAi, setLoadingAi] = useState(false);
     const [directShop, setDirectShop] = useState<DirectForm>(blankDirect);
     const [directFood, setDirectFood] = useState<DirectForm>(blankDirect);
+    const [detailProduct, setDetailProduct] = useState<Product | null>(null);
     const actor = userProfile?.name || '我';
     const charName = char?.name || 'TA';
 
@@ -435,7 +498,7 @@ export default function NuomiCommerceMiniApp({ open, initialMode = 'shopping', o
             <div className="p-3 sm:p-4 flex-1 min-h-0 overflow-y-auto block lg:grid lg:grid-cols-[1fr_310px] lg:gap-4 space-y-4 lg:space-y-0 overscroll-contain">
                 <main className="flex flex-col gap-3 overflow-visible"><div className="flex flex-wrap sm:flex-nowrap gap-2 overflow-visible sm:overflow-x-auto pb-1 shrink-0">{activeCats.map(c => <button key={c} onClick={() => setActiveCat(c)} className={`h-8 px-3 rounded-full text-xs font-black whitespace-nowrap border ${activeCat === c ? 'bg-slate-900 text-white border-slate-900' : 'bg-white/80 text-slate-500 border-slate-100'}`}>{c}</button>)}<button onClick={() => openCategorySheet(tab)} className="h-8 px-3 rounded-full text-xs font-black whitespace-nowrap bg-white text-pink-500 border border-pink-100">＋分类</button></div>
                     {manage && <div className="flex flex-wrap sm:flex-nowrap gap-2 overflow-visible sm:overflow-x-auto pb-1"><button onClick={() => remove(tab, Object.keys(activeChecked).filter(k => activeChecked[k]))} className="h-8 px-3 rounded-full bg-rose-50 text-rose-500 border border-rose-100 text-xs font-black whitespace-nowrap">删除选中</button><button onClick={() => removeCat(tab, activeCat)} className="h-8 px-3 rounded-full bg-rose-50 text-rose-500 border border-rose-100 text-xs font-black whitespace-nowrap">删除当前分类</button></div>}
-                    <div className="grid grid-cols-3 sm:grid-cols-2 lg:grid-cols-3 gap-2 sm:gap-3 overflow-visible content-start pb-3">{activeCat !== '全部' && <AddProductCard mode={tab} category={activeCat} onAdd={() => startManualAdd(tab)} />}{productList.map(p => <ProductCard key={p.id} mode={tab} product={p} manage={manage} checked={!!activeChecked[p.id]} onCheck={() => setActiveChecked(prev => ({ ...prev, [p.id]: !prev[p.id] }))} selected={tab === 'shopping' && selected?.id === p.id} onPick={() => { if (tab === 'shopping') { setSelectedId(p.id); } }} onAdd={() => tab === 'shopping' ? addLine(setCart, p) : addLine(setDeliveryCart, p)} onDelete={() => remove(tab, [p.id])} />)}</div>
+                    <div className="grid grid-cols-3 sm:grid-cols-2 lg:grid-cols-3 gap-2 sm:gap-3 overflow-visible content-start pb-3">{activeCat !== '全部' && <AddProductCard mode={tab} category={activeCat} onAdd={() => startManualAdd(tab)} />}{productList.map(p => <ProductCard key={p.id} mode={tab} product={p} manage={manage} checked={!!activeChecked[p.id]} onCheck={() => setActiveChecked(prev => ({ ...prev, [p.id]: !prev[p.id] }))} selected={tab === 'shopping' && selected?.id === p.id} onPick={() => { if (tab === 'shopping') { setSelectedId(p.id); } }} onShowDetail={() => setDetailProduct(p)} onAdd={() => tab === 'shopping' ? addLine(setCart, p) : addLine(setDeliveryCart, p)} onDelete={() => remove(tab, [p.id])} />)}</div>
                 </main>
                 <aside className="flex flex-col gap-3 overflow-visible lg:overflow-y-auto bg-[#f8fafc] rounded-[28px] border-t border-slate-100 pt-3 lg:border-t-0 lg:pt-0">
                     {tab === 'shopping' ? <><Cart products={products} cart={cart} title="购物车" onInc={l => inc(setCart, l)} onDec={l => dec(setCart, l)} onClear={() => setCart([])} /><Field label="购物备注（会显示在卡片里）"><textarea value={note} onChange={e => setNote(e.target.value)} placeholder="包装、原因、想说的话……" className={areaClass} /></Field><div className="grid grid-cols-3 gap-2"><button onClick={() => checkout(false)} className="h-11 rounded-2xl bg-white text-slate-700 border border-slate-100 text-[11px] sm:text-xs font-black flex items-center justify-center gap-1"><Receipt className="w-4 h-4" />给TA发小票</button><button onClick={() => checkout(true)} className="h-11 rounded-2xl bg-pink-500 text-white text-[11px] sm:text-xs font-black flex items-center justify-center gap-1"><Gift className="w-4 h-4" weight="fill" />送给TA</button><button onClick={charBuyFromCart} className="h-11 rounded-2xl bg-slate-900 text-white text-[11px] sm:text-xs font-black flex items-center justify-center gap-1"><Gift className="w-4 h-4" weight="fill" />TA主动给我买</button></div></> : <><Cart products={delivery} cart={deliveryCart} title="外卖篮" onInc={l => inc(setDeliveryCart, l)} onDec={l => dec(setDeliveryCart, l)} onClear={() => setDeliveryCart([])} /><div className="rounded-[28px] border border-slate-100 bg-white shadow-sm p-3 space-y-3"><Field label="备注（会显示在卡片里）"><textarea value={deliveryNote} onChange={e => setDeliveryNote(e.target.value)} className={areaClass} placeholder="少冰、不要香菜、配送说明……" /></Field><div className="flex justify-between"><span className="text-xs font-bold text-slate-400">当前合计</span><strong className="text-xl text-slate-900">{money(dtotal)}</strong></div><div className="grid grid-cols-3 gap-2"><button onClick={giftFood} className="h-11 rounded-2xl bg-orange-500 text-white text-[11px] sm:text-xs font-black flex items-center justify-center gap-1"><Gift className="w-4 h-4" />为TA点单</button><button onClick={requestFood} className="h-11 rounded-2xl bg-white text-slate-700 border border-slate-100 text-[11px] sm:text-xs font-black flex items-center justify-center gap-1"><PaperPlaneTilt className="w-4 h-4" />发起请求</button><button onClick={charDeliveryFromCart} className="h-11 rounded-2xl bg-slate-900 text-white text-[11px] sm:text-xs font-black flex items-center justify-center gap-1"><Gift className="w-4 h-4" />TA主动给我点外卖</button></div></div></>}
@@ -446,6 +509,7 @@ export default function NuomiCommerceMiniApp({ open, initialMode = 'shopping', o
         {categoryFor && <CategorySheet mode={categoryFor} value={categoryDraft} setValue={setCategoryDraft} onClose={() => setCategoryFor(null)} onSave={saveCategory} />}
         {apiOpen && <ApiSheet ai={ai} setAi={setAi} onClose={() => setApiOpen(false)} />}
         {dataOpen && <DataSheet onClose={() => setDataOpen(false)} onExport={exportCommerceData} onImport={importCommerceData} />}
+        {detailProduct && <ProductDetailSheet product={detailProduct} onClose={() => setDetailProduct(null)} />}
     </div>;
 }
 

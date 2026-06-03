@@ -40,6 +40,10 @@ const HOTNEWS_PLATFORM_OPTIONS: { key: string; label: string }[] = [
     { key: 'tenxunwang', label: '腾讯网' },
 ];
 
+// 「主动消息 Push 加速」面板入口开关。底层逻辑（心跳、订阅、诊断）全部保留，
+// 这里设为 false 只是把设置页里的入口隐藏掉，想恢复改回 true 即可。
+const SHOW_PROACTIVE_PUSH_ACCEL_UI = false;
+
 const DiagRow: React.FC<{ label: string; value: string; bad?: boolean }> = ({ label, value, bad }) => (
     <div className="flex items-start justify-between gap-3">
         <span className="text-slate-500 shrink-0">{label}</span>
@@ -1344,7 +1348,7 @@ const Settings: React.FC = () => {
         </section>
 
         {/* ───────── 主动消息 Push 加速器（开关） ───────── */}
-        {ppAvailable && (
+        {SHOW_PROACTIVE_PUSH_ACCEL_UI && ppAvailable && (
         <section className="bg-white/80 rounded-3xl p-5 shadow-sm border border-white/50">
             <div className="flex items-center justify-between mb-3">
                 <div className="flex items-center gap-2">
