@@ -1,0 +1,652 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>2026 年 5 月 27 日小更新说明</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Fraunces:ital,opsz,wght@0,9..144,400;0,9..144,500;0,9..144,600;0,9..144,700;1,9..144,400&family=Noto+Serif+SC:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+<style>
+  :root {
+    --ink: #1a1a1a;
+    --ink-soft: #3d3d3d;
+    --ink-mute: #6b6b6b;
+    --ink-faint: #9a9a9a;
+    --paper: #f7f1f2;
+    --paper-warm: #ecdde1;
+    --rule: #ddc7ce;
+    --accent: #a83d63;
+    --accent-soft: #c87391;
+    --highlight: #f4d6e1;
+    --note-bg: #ecdde1;
+    --tip-bg: #f0e6d4;
+    --warn-bg: #f1e3e1;
+    --mono: 'JetBrains Mono', ui-monospace, monospace;
+    --serif: 'Fraunces', 'Noto Serif SC', Georgia, serif;
+    --cn: 'Noto Serif SC', 'Fraunces', serif;
+  }
+
+  * { box-sizing: border-box; }
+  html { scroll-behavior: smooth; }
+
+  body {
+    margin: 0;
+    padding: 0;
+    background: var(--paper);
+    color: var(--ink);
+    font-family: var(--cn);
+    font-size: 17px;
+    line-height: 1.85;
+    font-feature-settings: "palt" 1, "kern" 1;
+    -webkit-font-smoothing: antialiased;
+    background-image:
+      radial-gradient(circle at 20% 10%, rgba(200, 115, 145, 0.07) 0%, transparent 40%),
+      radial-gradient(circle at 85% 90%, rgba(168, 61, 99, 0.05) 0%, transparent 40%);
+  }
+
+  body::before {
+    content: '';
+    position: fixed;
+    inset: 0;
+    pointer-events: none;
+    z-index: 0;
+    opacity: 0.4;
+    background-image: url("data:image/svg+xml,%3Csvg viewBox='0 0 200 200' xmlns='http://www.w3.org/2000/svg'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.9' numOctaves='2'/%3E%3CfeColorMatrix values='0 0 0 0 0.35 0 0 0 0 0.2 0 0 0 0 0.26 0 0 0 0.08 0'/%3E%3C/filter%3E%3Crect width='200' height='200' filter='url(%23n)'/%3E%3C/svg%3E");
+  }
+
+  .wrap {
+    position: relative;
+    z-index: 1;
+    max-width: 760px;
+    margin: 0 auto;
+    padding: 80px 32px 120px;
+  }
+
+  header.page {
+    border-bottom: 1px solid var(--rule);
+    padding-bottom: 48px;
+    margin-bottom: 56px;
+  }
+
+  .eyebrow {
+    font-family: var(--mono);
+    font-size: 11px;
+    letter-spacing: 0.3em;
+    text-transform: uppercase;
+    color: var(--accent);
+    margin-bottom: 24px;
+    display: flex;
+    align-items: center;
+    gap: 12px;
+  }
+
+  .eyebrow::after {
+    content: '';
+    flex: 1;
+    height: 1px;
+    background: var(--rule);
+  }
+
+  h1 {
+    font-family: var(--cn);
+    font-weight: 600;
+    font-size: 44px;
+    line-height: 1.25;
+    margin: 0 0 20px;
+    letter-spacing: -0.01em;
+  }
+
+  h1 .en {
+    display: block;
+    font-family: var(--serif);
+    font-style: italic;
+    font-weight: 400;
+    font-size: 22px;
+    color: var(--ink-mute);
+    margin-top: 12px;
+    letter-spacing: 0;
+  }
+
+  .lede {
+    font-size: 18px;
+    color: var(--ink-soft);
+    max-width: 600px;
+    margin-top: 28px;
+    line-height: 1.75;
+  }
+
+  .meta {
+    display: flex;
+    gap: 32px;
+    margin-top: 36px;
+    font-family: var(--mono);
+    font-size: 12px;
+    color: var(--ink-faint);
+    letter-spacing: 0.05em;
+    flex-wrap: wrap;
+  }
+
+  .meta span strong {
+    color: var(--ink-soft);
+    font-weight: 500;
+    margin-right: 8px;
+  }
+
+  .overview {
+    background: white;
+    border: 1px solid var(--rule);
+    border-radius: 4px;
+    padding: 24px 28px;
+    margin-bottom: 64px;
+  }
+
+  .overview h4 {
+    font-family: var(--mono);
+    font-size: 11px;
+    letter-spacing: 0.2em;
+    text-transform: uppercase;
+    color: var(--ink-mute);
+    margin: 0 0 14px;
+    font-weight: 500;
+  }
+
+  .overview ol {
+    margin: 0;
+    padding-left: 0;
+    list-style: none;
+    counter-reset: ov;
+  }
+
+  .overview li {
+    counter-increment: ov;
+    padding: 6px 0 6px 36px;
+    position: relative;
+    color: var(--ink-soft);
+    font-size: 15px;
+  }
+
+  .overview li::before {
+    content: counter(ov, decimal-leading-zero);
+    position: absolute;
+    left: 0;
+    top: 6px;
+    font-family: var(--serif);
+    font-style: italic;
+    color: var(--accent);
+    font-weight: 600;
+  }
+
+  .item {
+    margin-bottom: 56px;
+    scroll-margin-top: 40px;
+  }
+
+  .item-head {
+    display: flex;
+    align-items: baseline;
+    gap: 20px;
+    margin-bottom: 14px;
+    padding-bottom: 18px;
+    border-bottom: 1px dashed var(--rule);
+  }
+
+  .item-num {
+    font-family: var(--serif);
+    font-style: italic;
+    font-weight: 600;
+    font-size: 52px;
+    line-height: 1;
+    color: var(--accent);
+    flex-shrink: 0;
+  }
+
+  .item-title h2 {
+    font-family: var(--cn);
+    font-weight: 600;
+    font-size: 26px;
+    line-height: 1.3;
+    margin: 0 0 6px;
+    color: var(--ink);
+  }
+
+  .item-title .sub {
+    font-family: var(--serif);
+    font-style: italic;
+    color: var(--ink-mute);
+    font-size: 15px;
+  }
+
+  .tag-pill {
+    display: inline-block;
+    font-family: var(--mono);
+    font-size: 10px;
+    letter-spacing: 0.18em;
+    text-transform: uppercase;
+    color: var(--accent);
+    background: var(--paper-warm);
+    border: 1px solid var(--rule);
+    padding: 2px 10px;
+    border-radius: 999px;
+    margin-left: 4px;
+    vertical-align: middle;
+  }
+
+  .tag-pill.scope {
+    color: #7a5a2a;
+    background: #f5ecd8;
+    border-color: #e0d2ad;
+  }
+
+  p {
+    margin: 0 0 18px;
+    color: var(--ink-soft);
+  }
+
+  strong {
+    color: var(--ink);
+    font-weight: 600;
+  }
+
+  em {
+    font-family: var(--serif);
+    font-style: italic;
+    color: var(--accent);
+    font-weight: 500;
+  }
+
+  code, .kbd {
+    font-family: var(--mono);
+    font-size: 0.88em;
+    background: var(--paper-warm);
+    padding: 2px 7px;
+    border-radius: 3px;
+    color: var(--accent);
+    border: 1px solid var(--rule);
+  }
+
+  mark {
+    background: linear-gradient(180deg, transparent 55%, var(--highlight) 55%);
+    color: var(--ink);
+    padding: 0 2px;
+  }
+
+  .path {
+    font-family: var(--mono);
+    font-size: 13px;
+    background: var(--paper-warm);
+    padding: 3px 10px;
+    border-radius: 3px;
+    color: var(--ink);
+    border: 1px solid var(--rule);
+    white-space: nowrap;
+    display: inline-block;
+  }
+
+  .path .sep {
+    color: var(--ink-faint);
+    margin: 0 6px;
+  }
+
+  ul.clean {
+    list-style: none;
+    padding: 0;
+    margin: 14px 0;
+  }
+
+  ul.clean li {
+    padding: 5px 0 5px 22px;
+    position: relative;
+    color: var(--ink-soft);
+    font-size: 15.5px;
+  }
+
+  ul.clean li::before {
+    content: '—';
+    position: absolute;
+    left: 0;
+    color: var(--accent);
+    font-weight: 600;
+  }
+
+  ul.check {
+    list-style: none;
+    padding: 0;
+    margin: 14px 0;
+  }
+
+  ul.check li {
+    padding: 6px 0 6px 28px;
+    position: relative;
+    color: var(--ink-soft);
+    font-size: 15.5px;
+  }
+
+  ul.check li.yes::before {
+    content: '✓';
+    position: absolute;
+    left: 0;
+    top: 6px;
+    color: #2c7a52;
+    font-weight: 700;
+    font-size: 16px;
+  }
+
+  ul.check li.no::before {
+    content: '✗';
+    position: absolute;
+    left: 0;
+    top: 6px;
+    color: #a85a5a;
+    font-weight: 700;
+    font-size: 16px;
+  }
+
+  .note {
+    background: var(--note-bg);
+    border-left: 3px solid var(--ink-mute);
+    padding: 18px 22px;
+    border-radius: 3px;
+    margin: 22px 0;
+  }
+
+  .note .label {
+    font-family: var(--mono);
+    font-size: 10px;
+    letter-spacing: 0.25em;
+    text-transform: uppercase;
+    color: var(--ink-mute);
+    margin-bottom: 6px;
+    font-weight: 500;
+  }
+
+  .note p:last-child { margin-bottom: 0; }
+
+  .tip {
+    background: var(--tip-bg);
+    border-radius: 3px;
+    padding: 18px 22px;
+    margin: 22px 0;
+    border: 1px dashed #b8a890;
+  }
+
+  .tip .label {
+    font-family: var(--mono);
+    font-size: 10px;
+    letter-spacing: 0.25em;
+    text-transform: uppercase;
+    color: #7a5a2a;
+    margin-bottom: 6px;
+    font-weight: 600;
+  }
+
+  .tip p:last-child { margin-bottom: 0; }
+
+  ol.steps {
+    list-style: none;
+    padding-left: 0;
+    margin: 18px 0;
+    counter-reset: stp;
+  }
+
+  ol.steps > li {
+    counter-increment: stp;
+    padding: 10px 0 10px 44px;
+    position: relative;
+    color: var(--ink-soft);
+    font-size: 15.5px;
+    line-height: 1.75;
+  }
+
+  ol.steps > li::before {
+    content: counter(stp);
+    position: absolute;
+    left: 0;
+    top: 8px;
+    width: 28px;
+    height: 28px;
+    line-height: 26px;
+    text-align: center;
+    border-radius: 50%;
+    border: 1px solid var(--accent);
+    color: var(--accent);
+    font-family: var(--serif);
+    font-weight: 600;
+    font-size: 14px;
+    background: white;
+  }
+
+  figure.video {
+    margin: 26px 0;
+    padding: 0;
+  }
+
+  figure.video video {
+    width: 100%;
+    display: block;
+    border-radius: 6px;
+    border: 1px solid var(--rule);
+    background: #000;
+    box-shadow: 0 8px 28px rgba(168, 61, 99, 0.14);
+  }
+
+  figure.video figcaption {
+    font-family: var(--mono);
+    font-size: 11px;
+    letter-spacing: 0.08em;
+    color: var(--ink-faint);
+    text-align: center;
+    margin-top: 12px;
+  }
+
+  figure.video figcaption a {
+    color: var(--accent);
+    text-decoration: none;
+    border-bottom: 1px solid var(--accent-soft);
+  }
+
+  .finale {
+    margin-top: 48px;
+    background: white;
+    border: 1px solid var(--rule);
+    border-radius: 4px;
+    padding: 30px 34px;
+    text-align: center;
+  }
+
+  .finale .big {
+    font-family: var(--cn);
+    font-size: 22px;
+    font-weight: 600;
+    color: var(--ink);
+    margin-bottom: 8px;
+  }
+
+  .finale .small {
+    color: var(--ink-mute);
+    font-size: 15px;
+    margin-bottom: 0;
+  }
+
+  footer.page {
+    margin-top: 72px;
+    padding-top: 32px;
+    border-top: 1px solid var(--rule);
+    text-align: center;
+    font-family: var(--serif);
+    font-style: italic;
+    color: var(--ink-faint);
+    font-size: 15px;
+  }
+
+  footer.page .ornament {
+    font-size: 20px;
+    color: var(--accent);
+    margin-bottom: 12px;
+    letter-spacing: 8px;
+  }
+
+  @media (max-width: 640px) {
+    .wrap { padding: 48px 20px 80px; }
+    h1 { font-size: 32px; }
+    h1 .en { font-size: 17px; }
+    .item-head { flex-direction: column; gap: 4px; align-items: flex-start; }
+    .item-num { font-size: 42px; }
+    .item-title h2 { font-size: 22px; }
+    .meta { flex-direction: column; gap: 6px; }
+    .finale { padding: 22px 20px; }
+  }
+</style>
+</head>
+<body>
+
+<div class="wrap">
+
+  <header class="page">
+    <div class="eyebrow">May 27, 2026 · Minor Update</div>
+    <h1>
+      情绪也搬上云了
+      <span class="en">Send it, walk away — even the mood comes back on its own.</span>
+    </h1>
+    <p class="lede">
+      先用一句话说清楚这次能干嘛：开了 <em>Instant 模式</em>之后，你给角色发完消息，就可以<mark>彻底关掉网页走人</mark>，不用守在前台等。角色回复好了，会自己<strong>以系统推送通知的形式</strong>回到你手机上。这次新增的是 —— 连角色的<strong>「情绪 / 状态」</strong>也一起搬到了云端。
+    </p>
+    <div class="meta">
+      <span><strong>主题</strong>情绪 buff 接入 Instant Push</span>
+      <span><strong>类型</strong>小版本更新</span>
+      <span><strong>阅读</strong>约 1 分钟</span>
+    </div>
+  </header>
+
+  <div class="overview">
+    <h4>本次更新概览</h4>
+    <ol>
+      <li>开了 <strong>Instant 模式</strong>后，发完消息就能关网页走人，回复以<strong>推送通知</strong>回来。</li>
+      <li>这次新增：角色的<strong>情绪 / 状态（情绪 buff）</strong>也在云端生成，不再占用前端等待。</li>
+      <li>所以现在<strong>聊天回复</strong>和<strong>情绪 buff</strong> 两样都不用守在前端等了。</li>
+      <li><strong>上个版本配过 Instant Push 的：这次动了后端 Worker 代码，需要手动同步一次 Worker 才能用上（VAPID 和开关沿用即可，不用重配）。</strong></li>
+      <li>第一次用：先在<strong>设置 → Instant Push</strong> 配一次（下方附了配置视频），记得<strong>允许通知权限</strong>。</li>
+    </ol>
+  </div>
+
+  <!-- 1 -->
+  <section class="item" id="i-whatsnew">
+    <div class="item-head">
+      <div class="item-num">01</div>
+      <div class="item-title">
+        <h2>这次到底加了什么 <span class="tag-pill">NEW</span></h2>
+        <div class="sub">一句话：情绪 buff 也不用在前端等了。</div>
+      </div>
+    </div>
+
+    <p>
+      角色聊天时，背后其实还会偷偷算一份<strong>「情绪 / 状态」</strong> —— 也就是聊天框里那些小小的情绪标签（情绪 buff）。它会根据你们刚才聊的内容，更新角色现在是开心、闹脾气还是黏人。
+    </p>
+
+    <p><strong>之前是这样</strong></p>
+    <p>
+      就算你开了上次（5.17）的 Instant Push，<mark>情绪那一步还是得在前端算</mark>。也就是说回复虽然能推回来，但情绪更新还是要你把网页留着、等它跑完。
+    </p>
+
+    <p><strong>现在</strong></p>
+    <p>
+      情绪这一步也<strong>搬到了你自己的云端 Worker 上</strong>。所以现在<strong>聊天回复</strong>和<strong>情绪 buff</strong> 两样都在云端跑完，再一起以推送通知的形式回来。你发完消息，可以<mark>真正放心地把网页整个关掉</mark>。
+    </p>
+
+    <div class="tip">
+      <div class="label">说人话总结</div>
+      <p>
+        上次：发完文本能走，但情绪还得等。<br>
+        这次：发完文本能走，<strong>情绪也不用等了</strong> —— 发完即走，回头看通知就行。
+      </p>
+    </div>
+  </section>
+
+  <!-- 2 -->
+  <section class="item" id="i-howto">
+    <div class="item-head">
+      <div class="item-num">02</div>
+      <div class="item-title">
+        <h2>怎么用 · 看视频跟着点</h2>
+        <div class="sub">第一次配大概十分钟，之后就一劳永逸。</div>
+      </div>
+    </div>
+
+    <p>
+      如果你<strong>还没配过 Instant Push</strong>，需要先配置一次。别被「VAPID」「Worker」这些词吓到 —— 你不用懂它们是什么，<strong>照着视频一步步点就行</strong>：
+    </p>
+
+    <figure class="video">
+      <video controls preload="metadata" playsinline
+        src="https://raw.githubusercontent.com/qegj567-cloud/SullyOS-assets/main/instant.mp4">
+        你的浏览器不支持内嵌视频，<a href="https://raw.githubusercontent.com/qegj567-cloud/SullyOS-assets/main/instant.mp4" target="_blank" rel="noopener">点这里直接打开 →</a>
+      </video>
+      <figcaption>Instant Push 配置教程 · 看不清可<a href="https://raw.githubusercontent.com/qegj567-cloud/SullyOS-assets/main/instant.mp4" target="_blank" rel="noopener">点此全屏打开</a></figcaption>
+    </figure>
+
+    <p><strong>配好后的开关在哪</strong></p>
+    <ol class="steps">
+      <li>进入 <span class="path">设置<span class="sep">›</span>Instant Push</span> 面板。</li>
+      <li>按视频把 <strong>VAPID 凭据</strong>和 <strong>Worker</strong> 配好，把 Worker 地址填回来。</li>
+      <li>勾上<strong>「启用 Instant Push」</strong>，保存。</li>
+      <li>回到聊天，下次发消息就<strong>自动走 Instant 模式</strong>了 —— 看到气泡左边有三个跳动的小圆点就对了。</li>
+    </ol>
+
+    <div class="note">
+      <div class="label">已经配过上个版本的同学 · 重点</div>
+      <p>
+        这次更新动到了<strong>后端 Worker 的代码</strong>。因为 Worker 跑在<strong>你自己的 Cloudflare 账户</strong>里、<strong>不会自动跟着我们更新</strong>，所以这次<strong>需要你手动同步一次</strong>才能用上新版（包括情绪 buff 走云端）。
+      </p>
+      <p style="margin-top: 10px;">
+        同步很简单：到 <span class="path">设置<span class="sep">›</span>Instant Push</span>，按上面的视频/步骤把<strong>最新的 worker.bundle.js 重新粘贴部署一次</strong>即可。<strong>VAPID 凭据和开关都沿用之前那套，不用重新生成、也不用改前端配置。</strong>
+      </p>
+      <p style="margin-top: 10px;">
+        部署完回到 <span class="path">设置<span class="sep">›</span>Instant Push</span> 点一下<strong>测试推送</strong>，收到通知就说明新版生效了。
+      </p>
+    </div>
+  </section>
+
+  <!-- 3 -->
+  <section class="item" id="i-mind">
+    <div class="item-head">
+      <div class="item-num">03</div>
+      <div class="item-title">
+        <h2>两个最容易忽略的点 <span class="tag-pill scope">注意</span></h2>
+        <div class="sub">用户最常卡在这两步，特意拎出来。</div>
+      </div>
+    </div>
+
+    <ul class="check">
+      <li class="yes"><strong>一定要「允许通知权限」</strong> —— 不然云端算完了，回复也<strong>推不回你手机</strong>，等于白配。系统/浏览器弹出通知请求时点「允许」。</li>
+      <li class="yes"><strong>先配好 Instant Push 再用</strong> —— 没配 / 没启用的话，一切照旧（还是老样子在前台手动等），不会出错，只是享受不到「发完就走」。</li>
+    </ul>
+
+    <div class="note">
+      <div class="label">关于触发范围（和上次一样）</div>
+      <p>
+        目前走 Instant 的主要是<strong>主聊天框的普通文本消息</strong>和它附带的<strong>情绪 buff</strong>。图片、小红书卡片、麦当劳点餐、约会（见面模式）等其它路径<strong>仍走老路径</strong>，不受影响、也不会出问题。
+      </p>
+    </div>
+
+    <div class="tip">
+      <div class="label">关于隐私 / Key 安全</div>
+      <p>
+        Worker 跑在<strong>你自己的 Cloudflare 账户</strong>下，API 配置和 Key 都在你自己的环境变量里，<strong>不经过任何第三方中转</strong>。
+      </p>
+    </div>
+  </section>
+
+  <div class="finale">
+    <p class="big">5 月 27 日的小更新就这些</p>
+    <p class="small">发完消息真的可以关掉网页走人了 —— 聊天和情绪都交给云端，回头看通知就好。</p>
+  </div>
+
+  <footer class="page">
+    <div class="ornament">· · ·</div>
+    SullyOS Changelog · 2026.05.27
+  </footer>
+
+</div>
+
+</body>
+</html>

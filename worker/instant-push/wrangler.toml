@@ -1,0 +1,29 @@
+name = "instant-push"
+main = "src/index.ts"
+compatibility_date = "2026-01-01"
+# amsg-instant 0.3.0+ uses only Web Crypto; no compatibility_flags needed.
+# Secrets — set via Dashboard 或 wrangler secret put NAME
+#   VAPID_PUBLIC_KEY
+#   VAPID_PRIVATE_KEY
+#   VAPID_EMAIL          # 可选；缺则默认 mailto:noreply@example.com
+#   AMSG_CLIENT_TOKEN    # 可选；裸跑也行
+#   AMSG_OVERSIZE_TRANSPORT # 可选高级兜底；通常留空，由前台检测 D1 后按请求选择
+
+# 大包传输默认走 amsg-instant generic multipart，不需要数据库。
+# 可选绑定 D1 BlobStore envelope：多一次部署配置，换更稳的大对象传输。
+# 前台会通过 /capabilities 自动检测 D1；检测通过后才允许用户打开 D1 开关。
+#
+# 部署:
+#   wrangler d1 create instant-blob-db
+#   把下面 database_id 填上, 然后取消注释整个 [[d1_databases]] 块.
+#   表结构由 Worker 自动 CREATE IF NOT EXISTS, 不需要手动跑 schema.sql.
+#
+# [[d1_databases]]
+# binding = "DB"
+# database_name = "instant-blob-db"
+# database_id = "REPLACE_WITH_YOUR_D1_ID"
+
+# D1 过期 blob 会在请求经过 Worker 时自动定期清理。
+# 这段 cron 只是可选加速清理：低流量部署想更准时扫旧数据时再打开。
+# [triggers]
+# crons = ["*/15 * * * *"]
