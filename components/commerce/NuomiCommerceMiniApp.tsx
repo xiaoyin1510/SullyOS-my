@@ -21,6 +21,7 @@ type Props = { open: boolean; initialMode?: CommerceMode; onClose: () => void; c
 type AiPreset = { id: string; name: string; baseUrl: string; apiKey: string; model: string };
 type AiSettings = { baseUrl: string; apiKey: string; model: string; presetName: string; presets: AiPreset[]; models: string[]; contextMessageCount: number };
 type ProductFormState = { name: string; category: string; price: string; description: string; emoji: string; image: string };
+type ProductEditFormState = { name: string; price: string; description: string };
 type DirectForm = { name: string; amount: string; note: string };
 
 const STORAGE_VERSION = 5;
@@ -180,8 +181,9 @@ function AddProductCard({ mode, category, onAdd }: { mode: CommerceMode; categor
         <span className="hidden sm:block px-3 text-[11px] font-bold text-slate-400 text-center">{label}</span>
     </button>;
 }
-function ProductCard({ mode, product, checked, manage, selected, onCheck, onPick, onShowDetail, onAdd, onDelete }: { mode: CommerceMode; product: Product; checked?: boolean; manage?: boolean; selected?: boolean; onCheck: () => void; onPick: () => void; onShowDetail: () => void; onAdd: () => void; onDelete: () => void }) {
+function ProductCard({ mode, product, checked, manage, selected, onCheck, onOpenDetail, onEdit, onAdd, onDelete }: { mode: CommerceMode; product: Product; checked?: boolean; manage?: boolean; selected?: boolean; onCheck: () => void; onOpenDetail: () => void; onEdit: () => void; onAdd: () => void; onDelete: () => void }) {
     const longPressTimer = React.useRef<number | null>(null);
+    const longPressed = React.useRef(false);
     const clearLongPress = () => {
         if (longPressTimer.current != null) {
             window.clearTimeout(longPressTimer.current);
@@ -190,20 +192,29 @@ function ProductCard({ mode, product, checked, manage, selected, onCheck, onPick
     };
     const startLongPress = () => {
         clearLongPress();
+        longPressed.current = false;
         longPressTimer.current = window.setTimeout(() => {
             longPressTimer.current = null;
-            onShowDetail();
-        }, 520);
+            longPressed.current = true;
+            onEdit();
+        }, 560);
+    };
+    const handleMainClick = () => {
+        if (longPressed.current) {
+            longPressed.current = false;
+            return;
+        }
+        onOpenDetail();
     };
     return <article
         className={`relative rounded-2xl sm:rounded-3xl border p-1.5 sm:p-3 bg-white shadow-sm ${selected ? 'border-pink-300 ring-2 ring-pink-100' : 'border-slate-100'}`}
-        onContextMenu={(e) => { e.preventDefault(); onShowDetail(); }}
-        title="长按查看完整详情页"
+        onContextMenu={(e) => { e.preventDefault(); onEdit(); }}
+        title="点击查看完整详情页，长按修改商品"
     >
         {manage && <button type="button" onClick={onCheck} className={`absolute left-1 top-1 sm:left-2 sm:top-2 z-10 w-6 h-6 sm:w-7 sm:h-7 rounded-full border text-[10px] sm:text-xs font-black ${checked ? 'bg-slate-900 text-white border-slate-900' : 'bg-white text-slate-300 border-slate-200'}`}>{checked ? '✓' : ''}</button>}
         <button
             type="button"
-            onClick={onPick}
+            onClick={handleMainClick}
             onPointerDown={startLongPress}
             onPointerUp={clearLongPress}
             onPointerLeave={clearLongPress}
@@ -252,6 +263,28 @@ function ProductDetailSheet({ product, onClose }: { product: Product; onClose: (
         </div>
     </div>;
 }
+
+function ProductEditSheet({ mode, product, form, setForm, onClose, onSave }: { mode: CommerceMode; product: Product; form: ProductEditFormState; setForm: React.Dispatch<React.SetStateAction<ProductEditFormState>>; onClose: () => void; onSave: () => void }) {
+    const delivery = mode === 'delivery';
+    return <div className="fixed inset-0 z-[92] bg-slate-900/45 flex items-end sm:items-center justify-center p-0 sm:p-4" onMouseDown={onClose}>
+        <div className="w-full sm:max-w-md max-h-[90dvh] overflow-y-auto rounded-t-[30px] sm:rounded-[30px] bg-white p-4 shadow-2xl" onMouseDown={e => e.stopPropagation()}>
+            <div className="flex justify-between items-center mb-3">
+                <div className="min-w-0">
+                    <h3 className="font-black text-slate-900">修改{delivery ? '外卖' : '商品'}</h3>
+                    <div className="text-[11px] font-bold text-slate-400 truncate">分类：{product.category}</div>
+                </div>
+                <button onClick={onClose} className="w-9 h-9 rounded-full bg-slate-100 text-slate-500 flex items-center justify-center shrink-0"><X className="w-5 h-5" /></button>
+            </div>
+            <div className="space-y-3">
+                <Field label="名称"><input value={form.name} onChange={e => setForm(f => ({ ...f, name: e.target.value }))} className={inputClass} /></Field>
+                <Field label="价格"><input value={form.price} onChange={e => setForm(f => ({ ...f, price: e.target.value }))} type="number" className={inputClass} /></Field>
+                <Field label={delivery ? '详情页 / 外卖说明' : '详情页'}><textarea value={form.description} onChange={e => setForm(f => ({ ...f, description: e.target.value }))} className={areaClass} placeholder={delivery ? '例如：店铺口味、套餐内容、配送说明……' : '按正常商家视角描述商品卖点、材质、用途……'} /></Field>
+                <button onClick={onSave} className="w-full h-11 rounded-2xl bg-slate-900 text-white text-sm font-black">保存修改</button>
+            </div>
+        </div>
+    </div>;
+}
+
 function Cart({ products, cart, title, onInc, onDec, onClear }: { products: Product[]; cart: CartLine[]; title: string; onInc: (l: CartLine) => void; onDec: (l: CartLine) => void; onClear: () => void }) {
     const sum = summary(products, cart);
     return <aside className="rounded-[28px] border border-slate-100 bg-white shadow-sm p-3 min-h-[210px] flex flex-col"><div className="flex items-center justify-between mb-3"><div className="font-black text-slate-800 flex items-center gap-1.5"><ShoppingCartSimple className="w-4 h-4" weight="bold" />{title}</div>{cart.length > 0 && <button type="button" onClick={onClear} className="text-[11px] font-bold text-slate-400 flex items-center gap-1"><Trash className="w-3.5 h-3.5" />清空</button>}</div>{sum.lines.length === 0 ? <div className="h-28 rounded-2xl border border-dashed border-slate-200 bg-white/50 flex items-center justify-center text-xs font-bold text-slate-400">还没有选择</div> : <div className="space-y-2 max-h-52 overflow-y-auto pr-1">{sum.lines.map((l) => <div key={`${l.product.id}-${l.variation?.id || 'default'}`} className="rounded-2xl bg-slate-50 p-2.5"><div className="flex justify-between gap-2"><div className="min-w-0"><div className="text-xs font-black text-slate-700 truncate">{l.product.emoji || '🎁'} {l.label}</div><div className="text-[11px] font-bold text-slate-400">{money(l.price)} / 件</div></div><div className="text-xs font-black text-pink-500">{money(l.subtotal)}</div></div><div className="flex justify-end items-center gap-2 mt-2"><button type="button" onClick={() => onDec({ productId: l.product.id, variationId: l.variation?.id, qty: l.qty })} className="w-7 h-7 rounded-full bg-white border border-slate-200 flex items-center justify-center"><Minus className="w-3.5 h-3.5" /></button><span className="w-6 text-center text-xs font-black">{l.qty}</span><button type="button" onClick={() => onInc({ productId: l.product.id, variationId: l.variation?.id, qty: l.qty })} className="w-7 h-7 rounded-full bg-slate-900 text-white flex items-center justify-center"><Plus className="w-3.5 h-3.5" /></button></div></div>)}</div>}<div className="mt-auto pt-4 flex items-center justify-between border-t border-slate-100"><span className="text-xs font-bold text-slate-400">合计</span><strong className="text-xl text-slate-900">{money(sum.total)}</strong></div></aside>;
@@ -292,6 +325,8 @@ export default function NuomiCommerceMiniApp({ open, initialMode = 'shopping', o
     const [directShop, setDirectShop] = useState<DirectForm>(blankDirect);
     const [directFood, setDirectFood] = useState<DirectForm>(blankDirect);
     const [detailProduct, setDetailProduct] = useState<Product | null>(null);
+    const [editTarget, setEditTarget] = useState<{ mode: CommerceMode; product: Product } | null>(null);
+    const [editForm, setEditForm] = useState<ProductEditFormState>({ name: '', price: '', description: '' });
     const actor = userProfile?.name || '我';
     const charName = char?.name || 'TA';
 
@@ -396,6 +431,23 @@ export default function NuomiCommerceMiniApp({ open, initialMode = 'shopping', o
         if (formFor === 'delivery') { setDelivery(prev => [product, ...prev]); setDeliveryCategory(targetCategory); } else { setProducts(prev => [product, ...prev]); setCategory(targetCategory); setSelectedId(product.id); }
         setFormFor(null); setForm(blankProductForm); setToast(`已保存到“${targetCategory}”分类`);
     };
+    const startEditProduct = (mode: CommerceMode, product: Product) => {
+        setDetailProduct(null);
+        setEditTarget({ mode, product });
+        setEditForm({ name: product.name, price: String(product.price), description: product.description || '' });
+    };
+    const saveEditProduct = () => {
+        if (!editTarget) return;
+        const name = editForm.name.trim();
+        const price = Number(editForm.price) || 0;
+        if (!name || price <= 0) return setToast('请填写名称和价格');
+        const description = editForm.description.trim() || undefined;
+        const updater = (p: Product): Product => p.id === editTarget.product.id ? { ...p, name, price, description } : p;
+        if (editTarget.mode === 'shopping') setProducts(prev => prev.map(updater));
+        else setDelivery(prev => prev.map(updater));
+        setEditTarget(null);
+        setToast('商品已修改');
+    };
     const remove = (mode: CommerceMode, ids: string[]) => { if (!ids.length) return; if (!window.confirm(`确定删除 ${ids.length} 个商品吗？`)) return; if (mode === 'shopping') { setProducts(p => p.filter(x => !ids.includes(x.id))); setCart(c => c.filter(x => !ids.includes(x.productId))); setChecked({}); } else { setDelivery(p => p.filter(x => !ids.includes(x.id))); setDeliveryCart(c => c.filter(x => !ids.includes(x.productId))); setCheckedDelivery({}); } setToast('已删除'); };
     const removeCat = (mode: CommerceMode, cat: string) => {
         if (cat === '全部') return setToast('不能删除“全部”');
@@ -498,7 +550,7 @@ export default function NuomiCommerceMiniApp({ open, initialMode = 'shopping', o
             <div className="p-3 sm:p-4 flex-1 min-h-0 overflow-y-auto block lg:grid lg:grid-cols-[1fr_310px] lg:gap-4 space-y-4 lg:space-y-0 overscroll-contain">
                 <main className="flex flex-col gap-3 overflow-visible"><div className="flex flex-wrap sm:flex-nowrap gap-2 overflow-visible sm:overflow-x-auto pb-1 shrink-0">{activeCats.map(c => <button key={c} onClick={() => setActiveCat(c)} className={`h-8 px-3 rounded-full text-xs font-black whitespace-nowrap border ${activeCat === c ? 'bg-slate-900 text-white border-slate-900' : 'bg-white/80 text-slate-500 border-slate-100'}`}>{c}</button>)}<button onClick={() => openCategorySheet(tab)} className="h-8 px-3 rounded-full text-xs font-black whitespace-nowrap bg-white text-pink-500 border border-pink-100">＋分类</button></div>
                     {manage && <div className="flex flex-wrap sm:flex-nowrap gap-2 overflow-visible sm:overflow-x-auto pb-1"><button onClick={() => remove(tab, Object.keys(activeChecked).filter(k => activeChecked[k]))} className="h-8 px-3 rounded-full bg-rose-50 text-rose-500 border border-rose-100 text-xs font-black whitespace-nowrap">删除选中</button><button onClick={() => removeCat(tab, activeCat)} className="h-8 px-3 rounded-full bg-rose-50 text-rose-500 border border-rose-100 text-xs font-black whitespace-nowrap">删除当前分类</button></div>}
-                    <div className="grid grid-cols-3 sm:grid-cols-2 lg:grid-cols-3 gap-2 sm:gap-3 overflow-visible content-start pb-3">{activeCat !== '全部' && <AddProductCard mode={tab} category={activeCat} onAdd={() => startManualAdd(tab)} />}{productList.map(p => <ProductCard key={p.id} mode={tab} product={p} manage={manage} checked={!!activeChecked[p.id]} onCheck={() => setActiveChecked(prev => ({ ...prev, [p.id]: !prev[p.id] }))} selected={tab === 'shopping' && selected?.id === p.id} onPick={() => { if (tab === 'shopping') { setSelectedId(p.id); } }} onShowDetail={() => setDetailProduct(p)} onAdd={() => tab === 'shopping' ? addLine(setCart, p) : addLine(setDeliveryCart, p)} onDelete={() => remove(tab, [p.id])} />)}</div>
+                    <div className="grid grid-cols-3 sm:grid-cols-2 lg:grid-cols-3 gap-2 sm:gap-3 overflow-visible content-start pb-3">{activeCat !== '全部' && <AddProductCard mode={tab} category={activeCat} onAdd={() => startManualAdd(tab)} />}{productList.map(p => <ProductCard key={p.id} mode={tab} product={p} manage={manage} checked={!!activeChecked[p.id]} onCheck={() => setActiveChecked(prev => ({ ...prev, [p.id]: !prev[p.id] }))} selected={tab === 'shopping' && selected?.id === p.id} onOpenDetail={() => setDetailProduct(p)} onEdit={() => startEditProduct(tab, p)} onAdd={() => tab === 'shopping' ? addLine(setCart, p) : addLine(setDeliveryCart, p)} onDelete={() => remove(tab, [p.id])} />)}</div>
                 </main>
                 <aside className="flex flex-col gap-3 overflow-visible lg:overflow-y-auto bg-[#f8fafc] rounded-[28px] border-t border-slate-100 pt-3 lg:border-t-0 lg:pt-0">
                     {tab === 'shopping' ? <><Cart products={products} cart={cart} title="购物车" onInc={l => inc(setCart, l)} onDec={l => dec(setCart, l)} onClear={() => setCart([])} /><Field label="购物备注（会显示在卡片里）"><textarea value={note} onChange={e => setNote(e.target.value)} placeholder="包装、原因、想说的话……" className={areaClass} /></Field><div className="grid grid-cols-3 gap-2"><button onClick={() => checkout(false)} className="h-11 rounded-2xl bg-white text-slate-700 border border-slate-100 text-[11px] sm:text-xs font-black flex items-center justify-center gap-1"><Receipt className="w-4 h-4" />给TA发小票</button><button onClick={() => checkout(true)} className="h-11 rounded-2xl bg-pink-500 text-white text-[11px] sm:text-xs font-black flex items-center justify-center gap-1"><Gift className="w-4 h-4" weight="fill" />送给TA</button><button onClick={charBuyFromCart} className="h-11 rounded-2xl bg-slate-900 text-white text-[11px] sm:text-xs font-black flex items-center justify-center gap-1"><Gift className="w-4 h-4" weight="fill" />TA主动给我买</button></div></> : <><Cart products={delivery} cart={deliveryCart} title="外卖篮" onInc={l => inc(setDeliveryCart, l)} onDec={l => dec(setDeliveryCart, l)} onClear={() => setDeliveryCart([])} /><div className="rounded-[28px] border border-slate-100 bg-white shadow-sm p-3 space-y-3"><Field label="备注（会显示在卡片里）"><textarea value={deliveryNote} onChange={e => setDeliveryNote(e.target.value)} className={areaClass} placeholder="少冰、不要香菜、配送说明……" /></Field><div className="flex justify-between"><span className="text-xs font-bold text-slate-400">当前合计</span><strong className="text-xl text-slate-900">{money(dtotal)}</strong></div><div className="grid grid-cols-3 gap-2"><button onClick={giftFood} className="h-11 rounded-2xl bg-orange-500 text-white text-[11px] sm:text-xs font-black flex items-center justify-center gap-1"><Gift className="w-4 h-4" />为TA点单</button><button onClick={requestFood} className="h-11 rounded-2xl bg-white text-slate-700 border border-slate-100 text-[11px] sm:text-xs font-black flex items-center justify-center gap-1"><PaperPlaneTilt className="w-4 h-4" />发起请求</button><button onClick={charDeliveryFromCart} className="h-11 rounded-2xl bg-slate-900 text-white text-[11px] sm:text-xs font-black flex items-center justify-center gap-1"><Gift className="w-4 h-4" />TA主动给我点外卖</button></div></div></>}
@@ -510,6 +562,7 @@ export default function NuomiCommerceMiniApp({ open, initialMode = 'shopping', o
         {apiOpen && <ApiSheet ai={ai} setAi={setAi} onClose={() => setApiOpen(false)} />}
         {dataOpen && <DataSheet onClose={() => setDataOpen(false)} onExport={exportCommerceData} onImport={importCommerceData} />}
         {detailProduct && <ProductDetailSheet product={detailProduct} onClose={() => setDetailProduct(null)} />}
+        {editTarget && <ProductEditSheet mode={editTarget.mode} product={editTarget.product} form={editForm} setForm={setEditForm} onClose={() => setEditTarget(null)} onSave={saveEditProduct} />}
     </div>;
 }
 
