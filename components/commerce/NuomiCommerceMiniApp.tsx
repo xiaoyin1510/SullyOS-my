@@ -1,5 +1,5 @@
 import React, { useEffect, useMemo, useState } from 'react';
-import { X, Sparkle, ShoppingCartSimple, Plus, Minus, Trash, Receipt, Gift, PaperPlaneTilt, Storefront, BowlFood, ArrowsClockwise } from '@phosphor-icons/react';
+import { X, Sparkle, ShoppingCartSimple, Plus, Minus, Trash, Receipt, Gift, PaperPlaneTilt, Storefront, ArrowsClockwise, MagnifyingGlass } from '@phosphor-icons/react';
 import { APIConfig, CharacterProfile, Message, UserProfile } from '../../types';
 import { NUOMI_COMMERCE_FEATURE_EVENT, isNuomiCommerceFeatureEnabled, setNuomiCommerceFeatureEnabled } from '../../utils/nuomiCommerceFeature';
 
@@ -47,6 +47,13 @@ const defaultDelivery: Product[] = [
 ];
 
 const money = (n: number) => `¥${Number(n || 0).toFixed(2).replace(/\.00$/, '')}`;
+const normalizeSearch = (value: string) => String(value || '').toLowerCase().replace(/\s+/g, '');
+const productMatchesSearch = (p: Product, query: string) => {
+    const q = normalizeSearch(query);
+    if (!q) return true;
+    const source = normalizeSearch([p.name, p.category, p.description, p.note, p.emoji].filter(Boolean).join(' '));
+    return source.includes(q);
+};
 const id = (p = 'id') => `${p}-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`;
 const key = (mode: CommerceMode, charId?: string) => `nuomi_commerce_${mode}_products_v${STORAGE_VERSION}_${charId || 'global'}`;
 const catKey = (mode: CommerceMode, charId?: string) => `nuomi_commerce_${mode}_categories_v${STORAGE_VERSION}_${charId || 'global'}`;
@@ -316,6 +323,8 @@ export default function NuomiCommerceMiniApp({ open, initialMode = 'shopping', o
     const [deliveryCustomCats, setDeliveryCustomCats] = useState<string[]>(() => readCats('delivery', char?.id));
     const [category, setCategory] = useState('全部');
     const [deliveryCategory, setDeliveryCategory] = useState('全部');
+    const [shoppingSearch, setShoppingSearch] = useState('');
+    const [deliverySearch, setDeliverySearch] = useState('');
     const [selectedId, setSelectedId] = useState<string | null>(null);
     const [cart, setCart] = useState<CartLine[]>([]);
     const [deliveryCart, setDeliveryCart] = useState<CartLine[]>([]);
@@ -369,8 +378,14 @@ export default function NuomiCommerceMiniApp({ open, initialMode = 'shopping', o
 
     const cats = useMemo(() => ['全部', ...Array.from(new Set([...shoppingCustomCats, ...products.map(p => p.category).filter(Boolean)]))], [products, shoppingCustomCats]);
     const dcats = useMemo(() => ['全部', ...Array.from(new Set([...deliveryCustomCats, ...delivery.map(p => p.category).filter(Boolean)]))], [delivery, deliveryCustomCats]);
-    const visible = useMemo(() => category === '全部' ? products : products.filter(p => p.category === category), [products, category]);
-    const dvisible = useMemo(() => deliveryCategory === '全部' ? delivery : delivery.filter(p => p.category === deliveryCategory), [delivery, deliveryCategory]);
+    const visible = useMemo(() => {
+        const byCategory = category === '全部' ? products : products.filter(p => p.category === category);
+        return byCategory.filter(p => productMatchesSearch(p, shoppingSearch));
+    }, [products, category, shoppingSearch]);
+    const dvisible = useMemo(() => {
+        const byCategory = deliveryCategory === '全部' ? delivery : delivery.filter(p => p.category === deliveryCategory);
+        return byCategory.filter(p => productMatchesSearch(p, deliverySearch));
+    }, [delivery, deliveryCategory, deliverySearch]);
     const selected = products.find(p => p.id === selectedId) || visible[0] || products[0];
     const ssum = summary(products, cart);
     const dsum = summary(delivery, deliveryCart);
@@ -556,12 +571,14 @@ export default function NuomiCommerceMiniApp({ open, initialMode = 'shopping', o
     const activeCats = tab === 'shopping' ? cats : dcats;
     const activeCat = tab === 'shopping' ? category : deliveryCategory;
     const setActiveCat = tab === 'shopping' ? setCategory : setDeliveryCategory;
+    const activeSearch = tab === 'shopping' ? shoppingSearch : deliverySearch;
+    const setActiveSearch = tab === 'shopping' ? setShoppingSearch : setDeliverySearch;
     const activeChecked = tab === 'shopping' ? checked : checkedDelivery;
     const setActiveChecked = tab === 'shopping' ? setChecked : setCheckedDelivery;
 
     return <div className="fixed inset-0 z-[70] bg-slate-900/35 backdrop-blur-sm flex items-end sm:items-center justify-center p-0 sm:p-3" onMouseDown={onClose}>
         <section className="w-full sm:max-w-[980px] h-[100dvh] sm:h-[800px] sm:max-h-[92vh] rounded-none sm:rounded-[34px] bg-[#f8fafc] border border-white/70 shadow-2xl overflow-hidden flex flex-col" onMouseDown={e => e.stopPropagation()}>
-            <header className="px-4 py-3 bg-white flex items-center justify-between gap-3 shrink-0 relative z-10"><div className="flex items-center gap-2 min-w-0"><div className="w-10 h-10 rounded-2xl bg-gradient-to-br from-pink-100 to-orange-100 text-pink-500 flex items-center justify-center shadow-sm">{tab === 'shopping' ? <Storefront className="w-5 h-5" weight="fill" /> : <BowlFood className="w-5 h-5" weight="fill" />}</div><div className="flex items-center gap-2 min-w-0"><h2 className="text-base font-black text-slate-900 whitespace-nowrap">购物中心</h2><button onClick={toggleFeature} className={`h-8 px-3 rounded-xl text-sm font-black border shrink-0 transition-colors ${featureEnabled ? 'bg-pink-50 text-pink-500 border-pink-200' : 'bg-white text-slate-500 border-slate-200'}`}>{featureEnabled ? '开' : '关'}</button></div></div><div className="flex items-center gap-2"><div className="p-1 rounded-2xl bg-slate-100 flex gap-1"><button onClick={() => setTab('shopping')} className={`h-8 px-3 rounded-xl text-xs font-black ${tab === 'shopping' ? 'bg-white text-pink-500 shadow-sm' : 'text-slate-400'}`}>购物</button><button onClick={() => setTab('delivery')} className={`h-8 px-3 rounded-xl text-xs font-black ${tab === 'delivery' ? 'bg-white text-orange-500 shadow-sm' : 'text-slate-400'}`}>外卖</button></div><button onClick={onClose} className="w-9 h-9 rounded-full bg-slate-100 text-slate-500 flex items-center justify-center"><X className="w-5 h-5" /></button></div></header>
+            <header className="px-4 py-3 bg-white flex items-center justify-between gap-3 shrink-0 relative z-10"><div className="flex items-center gap-2 min-w-0"><div className="w-10 h-10 rounded-2xl bg-gradient-to-br from-pink-100 to-orange-100 text-pink-500 flex items-center justify-center shadow-sm"><Storefront className="w-5 h-5" weight="fill" /></div><div className="flex items-center gap-2 min-w-0"><h2 className="text-base font-black text-slate-900 whitespace-nowrap">购物中心</h2><button onClick={toggleFeature} className={`h-8 px-3 rounded-xl text-sm font-black border shrink-0 transition-colors ${featureEnabled ? 'bg-pink-50 text-pink-500 border-pink-200' : 'bg-white text-slate-500 border-slate-200'}`}>{featureEnabled ? '开' : '关'}</button></div></div><div className="flex items-center gap-2"><div className="p-1 rounded-2xl bg-slate-100 flex gap-1"><button onClick={() => setTab('shopping')} className={`h-8 px-3 rounded-xl text-xs font-black ${tab === 'shopping' ? 'bg-white text-pink-500 shadow-sm' : 'text-slate-400'}`}>购物</button><button onClick={() => setTab('delivery')} className={`h-8 px-3 rounded-xl text-xs font-black ${tab === 'delivery' ? 'bg-white text-orange-500 shadow-sm' : 'text-slate-400'}`}>外卖</button></div><button onClick={onClose} className="w-9 h-9 rounded-full bg-slate-100 text-slate-500 flex items-center justify-center"><X className="w-5 h-5" /></button></div></header>
             {toast && <CommerceToast message={toast} leaving={toastLeaving} className="mx-4 mt-3 shrink-0" />}
             <div className="px-3 sm:px-4 pt-1 pb-3 shrink-0 bg-white"><div className="flex flex-wrap gap-2"><button onClick={() => setApiOpen(true)} className="h-8 px-3 rounded-full text-xs font-black whitespace-nowrap bg-slate-100 text-slate-700 border border-slate-200">⚙ API</button><button onClick={() => setDataOpen(true)} className="h-8 px-3 rounded-full text-xs font-black whitespace-nowrap bg-slate-100 text-slate-700 border border-slate-200">数据</button><button onClick={doAi} disabled={loadingAi} className="h-8 px-3 rounded-full text-xs font-black whitespace-nowrap bg-slate-100 text-slate-700 border border-slate-200 flex items-center gap-1">{loadingAi ? <ArrowsClockwise className="w-3.5 h-3.5 animate-spin" /> : <Sparkle className="w-3.5 h-3.5" weight="fill" />}AI补货</button><button onClick={() => setManage(v => !v)} className="h-8 px-3 rounded-full text-xs font-black whitespace-nowrap bg-slate-100 text-slate-700 border border-slate-200">{manage ? '完成管理' : '管理'}</button></div></div>
             <div className="px-3 sm:px-4 pt-0 pb-3 sm:pb-4 flex-1 min-h-0 overflow-y-auto overscroll-contain bg-[#f8fafc]">
@@ -569,9 +586,20 @@ export default function NuomiCommerceMiniApp({ open, initialMode = 'shopping', o
                     <div className="sticky top-0 z-40 -mx-3 sm:-mx-4 px-3 sm:px-4 pt-2 pb-3 bg-[#f8fafc] border-b border-slate-100 shadow-[0_10px_18px_rgba(248,250,252,1)]">
                         <div className="flex flex-wrap sm:flex-nowrap gap-2 overflow-visible sm:overflow-x-auto pb-1 shrink-0">
                             <button type="button" onClick={() => setCartSheetOpen(tab)} className={`relative w-9 h-9 rounded-full flex items-center justify-center shrink-0 shadow-sm border ${tab === 'shopping' ? 'bg-pink-50 text-pink-500 border-pink-100' : 'bg-orange-50 text-orange-500 border-orange-100'}`} title={tab === 'shopping' ? '打开购物车' : '打开外卖篮'}>
-                                {tab === 'shopping' ? <ShoppingCartSimple className="w-5 h-5" weight="bold" /> : <BowlFood className="w-5 h-5" weight="bold" />}
+                                <ShoppingCartSimple className="w-5 h-5" weight="bold" />
                                 {activeCartQty > 0 && <span className="absolute -top-1 -right-1 min-w-[18px] h-[18px] px-1 rounded-full bg-slate-900 text-white text-[10px] font-black flex items-center justify-center leading-none">{activeCartQty > 99 ? '99+' : activeCartQty}</span>}
                             </button>
+                            <label className="h-9 min-w-[120px] sm:min-w-[170px] max-w-[220px] flex-1 sm:flex-none rounded-full bg-white border border-slate-100 px-3 flex items-center gap-1.5 shadow-sm">
+                                <MagnifyingGlass className="w-4 h-4 text-slate-400 shrink-0" weight="bold" />
+                                <input
+                                    value={activeSearch}
+                                    onChange={e => setActiveSearch(e.target.value)}
+                                    placeholder={tab === 'shopping' ? '搜商品' : '搜外卖'}
+                                    className="min-w-0 flex-1 bg-transparent outline-none text-xs font-bold text-slate-700 placeholder:text-slate-400"
+                                    onClick={e => e.stopPropagation()}
+                                />
+                                {activeSearch && <button type="button" onClick={() => setActiveSearch('')} className="text-[11px] font-black text-slate-400 shrink-0">×</button>}
+                            </label>
                             {activeCats.map(c => <button key={c} onClick={() => setActiveCat(c)} className={`h-8 px-3 rounded-full text-xs font-black whitespace-nowrap border ${activeCat === c ? 'bg-slate-900 text-white border-slate-900' : 'bg-white/80 text-slate-500 border-slate-100'}`}>{c}</button>)}
                             <button onClick={() => openCategorySheet(tab)} className="h-8 px-3 rounded-full text-xs font-black whitespace-nowrap bg-white text-pink-500 border border-pink-100">＋分类</button>
                         </div>
