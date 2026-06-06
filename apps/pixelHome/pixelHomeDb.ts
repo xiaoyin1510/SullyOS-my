@@ -10,22 +10,15 @@ import type { PixelAsset, PixelRoomLayout, PixelHomeState } from './types';
 import type { MemoryRoom } from '../../utils/memoryPalace/types';
 import { ROOM_SLOTS, DEFAULT_ROOM_COLORS, ALL_ROOMS } from './roomTemplates';
 import type { PlacedFurniture } from './types';
+import { openDB } from '../../utils/db';
 
 // ─── DB 常量 ─────────────────────────────────────────
+// pixel_home_* 两个 store 由 utils/db.ts 的 AetherOS_Data upgradeneeded 统一创建,
+// 这里直接复用 utils/db.ts 的单例 openDB —— 本地原来那个 openDB 每次操作都裸开一条
+// AetherOS_Data 连接 (连版本号都没传), 既漏连接又绕过单例, 会一起喂大连接风暴。
 
-const DB_NAME = 'AetherOS_Data';
 const STORE_ASSETS = 'pixel_home_assets';
 const STORE_LAYOUTS = 'pixel_home_layouts';
-
-// ─── 辅助：打开数据库 ───────────────────────────────
-
-async function openDB(): Promise<IDBDatabase> {
-  return new Promise((resolve, reject) => {
-    const req = indexedDB.open(DB_NAME);
-    req.onsuccess = () => resolve(req.result);
-    req.onerror = () => reject(req.error);
-  });
-}
 
 // ─── 资产 CRUD ──────────────────────────────────────
 

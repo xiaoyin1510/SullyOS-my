@@ -5,6 +5,7 @@ import { MusicProvider } from './context/MusicContext';
 import PhoneShell from './components/PhoneShell';
 import BuildBadge from './components/BuildBadge';
 import DevDebugPanel from './components/DevDebugPanel';
+import VRBroadcast from './components/VRBroadcast';
 import { isIOSStandaloneWebApp } from './utils/iosStandalone';
 
 const App: React.FC = () => {
@@ -35,6 +36,7 @@ const App: React.FC = () => {
       </div>
       <BuildBadge />
       <DevDebugPanel />
+      <VRBroadcast />
     </>
   );
 };

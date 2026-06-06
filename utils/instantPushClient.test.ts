@@ -1,9 +1,10 @@
-import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import {
   sendInstantPush,
   saveInstantConfig,
   INSTANT_PUSH_CONFIG_KEY,
   probeInstantWorkerCapabilities,
+  postSsePayloadToServiceWorker,
 } from './instantPushClient';
 import type { InstantPushPayload } from './instantPushClient';
 import { savePushVapid } from './pushVapid';
@@ -127,5 +128,75 @@ describe('probeInstantWorkerCapabilities', () => {
       'https://worker.example.com/capabilities',
       expect.objectContaining({ method: 'POST' }),
     );
+  });
+});
+
+// postSsePayloadToServiceWorker: amsg-sw 2.3.0+ 的 ack 在落库失败时回 { ok:true, businessError }。
+// 这里用最小 stub 模拟 SW 回 ack, 锁住 businessError 被正确透传 (而不是被吞回一个干净的 true)。
+describe('postSsePayloadToServiceWorker ack 解析', () => {
+  // node 环境没有这些浏览器全局 (且 navigator 是只读 getter), 用 vi.stubGlobal 注入,
+  // afterEach 一并 unstub 还原, 避免污染其它用例。
+  let ackToReturn: any;
+
+  class FakePort {
+    onmessage: ((e: any) => void) | null = null;
+    peer: FakePort | null = null;
+    postMessage(data: any) {
+      const peer = this.peer;
+      if (peer) Promise.resolve().then(() => peer.onmessage?.({ data }));
+    }
+    close() {}
+  }
+  class FakeMessageChannel {
+    port1 = new FakePort();
+    port2 = new FakePort();
+    constructor() {
+      this.port1.peer = this.port2;
+      this.port2.peer = this.port1;
+    }
+  }
+
+  beforeEach(() => {
+    vi.stubGlobal('MessageChannel', FakeMessageChannel);
+    vi.stubGlobal('window', {
+      setTimeout: setTimeout.bind(globalThis),
+      clearTimeout: clearTimeout.bind(globalThis),
+    });
+    // controller 收到投递后, 在被转移的 port (port2) 上回 ack —— 路由到 client 的 port1.onmessage。
+    vi.stubGlobal('navigator', {
+      serviceWorker: {
+        controller: {
+          postMessage: (_msg: any, transfer: any[]) => {
+            const port2 = transfer?.[0] as FakePort;
+            port2?.postMessage(ackToReturn);
+          },
+        },
+      },
+    });
+  });
+
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  it('落库失败: ack ok:true + businessError 被透传, 不被吞成干净的 true', async () => {
+    ackToReturn = { ok: true, businessError: 'inbox write failed: QuotaExceededError' };
+    const res = await postSsePayloadToServiceWorker({ messageId: 'm1' });
+    expect(res.ok).toBe(true);
+    expect(res.businessError).toBe('inbox write failed: QuotaExceededError');
+  });
+
+  it('正常落库: ack ok:true 无 businessError', async () => {
+    ackToReturn = { ok: true };
+    const res = await postSsePayloadToServiceWorker({ messageId: 'm2' });
+    expect(res.ok).toBe(true);
+    expect(res.businessError).toBeUndefined();
+  });
+
+  it('无 controller 时返回 { ok:false }', async () => {
+    vi.stubGlobal('navigator', { serviceWorker: { controller: null } });
+    const res = await postSsePayloadToServiceWorker({ messageId: 'm3' });
+    expect(res.ok).toBe(false);
+    expect(res.businessError).toBeUndefined();
   });
 });

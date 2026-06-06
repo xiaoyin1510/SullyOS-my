@@ -35,6 +35,8 @@ export enum AppID {
   Handbook = 'handbook', // 手账 — 跨角色聚合的生活留痕本（LLM 代笔 + 角色生活流陪伴）
   QQBridge = 'qq_bridge', // QQ 桥接 — 通过 NapCat 把 QQ 私聊接入当前角色，共享 IndexedDB 上下文
   HotNews = 'hot_news', // 热点 — 分时段召回的多平台热榜可视化（决定角色可能聊起的话题）
+  VRWorld = 'vrworld', // 彼方 — 角色自主登入的虚拟世界（定时驱动，房间里看小说/听歌/留言，产出活动卡注入聊天+记忆）
+  CharCreatorDev = 'char_creator_dev', // 捏脸系统开发模式 — 仅开发模式可见，向捏人器指定类目追加自定义部件
 }
 
 export interface SystemLog {
@@ -610,6 +612,232 @@ export interface NovelBook {
     lastActiveAt: number;
 }
 
+// =====================================================================
+// --- VR WORLD ("彼方") TYPES ---
+// 角色自主登入的虚拟世界。定时器驱动每个角色独立调用一次 LLM，在某个房间
+// 完成一次活动（v1：图书馆看小说），产出一张活动卡注入该角色的 1v1 聊天，
+// 天然被上下文与记忆总结捕捉。
+// =====================================================================
+
+/** 虚拟世界里的房间。 */
+export type VRRoomId = 'library' | 'music' | 'guestbook' | 'gym' | 'postoffice' | 'cafe';
+
+/** 全局小说库里的一本书（所有角色共享原文，各自留批注、各自书签）。 */
+export interface VRWorldNovel {
+    id: string;
+    title: string;
+    author?: string;
+    /** 简介，喂给角色当背景，也用于 UI 展示 */
+    summary?: string;
+    /** 原文按阅读单元切好的段落块（每块 ~数百字，便于定位批注与推进书签）。 */
+    segments: VRNovelSegment[];
+    /** 总字数（缓存，UI 展示用） */
+    totalChars: number;
+    createdAt: number;
+    updatedAt: number;
+}
+
+/** 小说里的一个阅读单元（原文段落块）。 */
+export interface VRNovelSegment {
+    /** 段落索引（0-based，等于在 segments 数组里的位置，持久化以防重排） */
+    idx: number;
+    /** 原文内容 */
+    text: string;
+    /** 字数（缓存） */
+    chars: number;
+}
+
+/**
+ * 一条批注。挂在 (novelId, segIdx) 上，可被任何角色吐槽（targetAnnotationId 指向被吐槽的批注）。
+ * 全局存在 VRWorldNovel 之外的独立集合里——见 db 的 vr_annotations 字段。
+ */
+export interface VRNovelAnnotation {
+    id: string;
+    novelId: string;
+    /** 批注锚定的段落索引 */
+    segIdx: number;
+    /** 作者角色 id（user 留批注时为 'user'） */
+    authorId: string;
+    /** 作者展示名（落库冗余，避免角色删除后丢名） */
+    authorName: string;
+    /** 批注/吐槽正文 */
+    content: string;
+    /** 若是"吐槽别人的吐槽"，指向被吐槽的批注 id */
+    targetAnnotationId?: string;
+    createdAt: number;
+}
+
+/** 角色在虚拟世界里的个人状态（挂在 CharacterProfile.vrState）。 */
+export interface VRWorldCharState {
+    /** 是否启用该角色的自主登入（独立于主动发消息 proactiveConfig） */
+    enabled: boolean;
+    /** 自主登入间隔（分钟，30 对齐；默认 120 = 2h） */
+    intervalMinutes: number;
+    /**
+     * 每本小说的独立书签：novelId -> 下一次该从第几个 segment 开始读。
+     * 这是"每个角色书签不一样"的落点。
+     */
+    novelBookmarks?: Record<string, number>;
+    /** 最近一次活动落在哪个房间（UI 立绘站位用） */
+    currentRoom?: VRRoomId;
+    /** 最近一次活动时间戳（UI / 调度展示用） */
+    lastActiveAt?: number;
+    /** 该角色专属 API 覆盖（用户可单独为「彼方」活动配 api）；不设则回落全局 apiConfig。 */
+    api?: { baseUrl: string; apiKey: string; model: string };
+    /**
+     * 角色在「彼方」里的 chibi 形象（Q版小人）。启用自主登入时要求设定，可随时编辑。
+     * img 不设时回退到角色立绘/头像。
+     */
+    chibi?: {
+        /** 形象图（透明背景 PNG，来自特别时光的捏人器 transparentDataUrl） */
+        img: string;
+        /** 捏人器导出的完整状态，回填用于再编辑（state.selected 可作为 presets） */
+        state?: any;
+        /** 站位缩放（默认 1） */
+        scale?: number;
+        /** 垂直微调（px，负数上移，默认 0） */
+        offsetY?: number;
+        /** 是否水平翻转 */
+        flip?: boolean;
+    };
+}
+
+/** 注入聊天的 vr_card 消息的 metadata 结构。 */
+export interface VRCardMeta {
+    vrCard: true;
+    room: VRRoomId;
+    /** 活动概述（steam 提示式，UI 标题） */
+    activity: string;
+    novelId?: string;
+    novelTitle?: string;
+    /** 本次读到的段落范围 [from, to)（仅 library） */
+    segRange?: [number, number];
+    /** 本次写下的批注摘要（保留正文，原文省略） */
+    annotationExcerpts?: string[];
+    /** 带段落锚点的批注引用（用于从动态点回原文跳转） */
+    annotationRefs?: { segIdx: number; text: string }[];
+    // --- 听歌房专用 ---
+    /** 本次评/听的当前歌（名 - 歌手） */
+    songLabel?: string;
+    /** 本次点/排进队列的自己的歌 */
+    queuedLabel?: string;
+    /** 此刻的行为描述（盯着跳/跟唱/给user录…；娱乐室也用） */
+    behavior?: string;
+    // --- 留言簿专用 ---
+    /** 本次发到留言簿的话（保留正文） */
+    boardPost?: string;
+    /** 本次发到留言簿的所有发言（原样，含回复对象），用于同步进 1v1 聊天/记忆 */
+    boardPosts?: { content: string; replyToName?: string }[];
+    /** 回复了谁 */
+    boardReplyToName?: string;
+    /** 这条卡片是"用户在留言簿发言"广播给该 char 的 */
+    userBoardPost?: boolean;
+    // --- 邮局专用 ---
+    /** 本次写信/回信的正文摘要 */
+    letterExcerpt?: string;
+}
+
+/** 邮局：一封信收到的回复（留档用）。 */
+export interface VRLetterReply {
+    pen: string;
+    content: string;
+    createdAt: number;
+}
+
+/**
+ * 邮局信件（本地存档 + 队列）。
+ * box='outbox'：我方角色写的漂流信（待寄出→已寄出→收到回复留档）。
+ * box='inbox' ：从别的用户那抽到的信（待回信→待发送回信→已发送）。
+ */
+export interface VRLetter {
+    id: string;                 // 本地 id
+    box: 'outbox' | 'inbox';
+    pen: string;                // 笔名（写信角色名 / 远端寄信方笔名）
+    content: string;
+    createdAt: number;
+    charId?: string;            // 写这封信/回信的角色
+
+    // outbox
+    status?: 'queued' | 'sent' | 'archived' | 'sealed';  // 待寄出 / 已寄出 / 收到回复留档 / 角色已读并封存
+    remoteId?: string;          // 寄出后服务端分配的远端 id
+    released?: boolean;         // 作者已「停止传播」：后端已删、退出公共池，本地仍留档
+    sentAt?: number;
+    repliesReceived?: VRLetterReply[];
+    /** 原作者角色读过回信后的感触（写完即封存，使命完成） */
+    reaction?: { content: string; createdAt: number };
+
+    // inbox
+    remoteLetterId?: string;    // 远端信 id（回信时用）
+    replyStatus?: 'none' | 'queued' | 'sent'; // 未回 / 待发送回信 / 已发送
+    reply?: { charId: string; pen: string; content: string; createdAt: number; userNote?: string };
+    fetchedAt?: number;
+
+    // 互动热度缓存（服务端为准；UI 即时反馈用）
+    likes?: number;             // 点赞数
+    dislikes?: number;          // 点踩(=举报)数
+    views?: number;             // 被抽到/浏览次数
+    myVote?: 1 | -1 | 0;        // 我对这封信的投票（inbox 抽到的信）
+}
+
+/** 听歌房队列项。 */
+export interface VRMusicQueueItem {
+    song: CharPlaylistSong;
+    charId: string;
+    charName: string;
+}
+
+/** 留言簿（共享版聊墙）的一条留言。 */
+export interface VRGuestbookMessage {
+    id: string;
+    /** 'user' = 用户本人，其余为 charId */
+    authorId: string;
+    authorName: string;
+    content: string;
+    /** 若是回复某条留言 */
+    replyToId?: string;
+    replyToName?: string;
+    createdAt: number;
+}
+
+/** 留言簿共享状态（单例，所有角色 + 用户共用一面墙）。 */
+export interface VRGuestbookState {
+    id: string; // 'board' 单例
+    messages: VRGuestbookMessage[];
+    updatedAt: number;
+}
+
+/** 听歌房共享状态（单例，所有角色共用一个循环队列）。 */
+export interface VRMusicRoomState {
+    id: string; // 'state' 单例
+    nowPlaying?: {
+        song: CharPlaylistSong;
+        charId: string;
+        charName: string;
+        /** 选曲心境/理由 */
+        vibe?: string;
+        since: number;
+    };
+    queue: VRMusicQueueItem[];
+    updatedAt: number;
+}
+
+/**
+ * 捏脸系统自定义部件（开发模式追加）。运行时由 CreatorIframe 读出，随 like520_init
+ * 以 extraItems 注入捏人器，合并进对应类目的 PARTS。520 / 彼方 都会拿到。
+ */
+export interface CustomCreatorPart {
+    id: string;
+    /** 归属类目 key（如 skin / fronthair / outfit …，须与捏人器 PARTS 的 key 对应） */
+    categoryKey: string;
+    /** 面板里显示的名字 */
+    name: string;
+    /** 部件图（透明 PNG 的 data URL，须与捏人器画布同尺寸/同锚点） */
+    src: string;
+    /** 是否可被换色（对应 item.tintable） */
+    tintable?: boolean;
+    createdAt: number;
+}
+
 // --- SONGWRITING APP TYPES ---
 export type SongMood = 'happy' | 'sad' | 'romantic' | 'angry' | 'chill' | 'epic' | 'nostalgic' | 'dreamy';
 export type SongGenre = 'pop' | 'rock' | 'ballad' | 'rap' | 'folk' | 'electronic' | 'jazz' | 'rnb' | 'free';
@@ -1049,6 +1277,11 @@ export interface CharacterProfile {
       pitch?: number;
   };
 
+  // 时间感知强化：开启（默认）时会向上下文注入「距离上次聊天已过去多久」的强化提示，
+  // 让角色强化时间观念、主动匹配现实世界时间。关掉后不再注入这组提示词
+  // （注意：历史消息本身仍带时间戳，关掉后弱化程度取决于模型自身理解）。
+  timeAwarenessEnabled?: boolean;
+
   // Chat & Date voice TTS settings
   chatVoiceEnabled?: boolean;
   chatVoiceLang?: string;
@@ -1160,6 +1393,12 @@ export interface CharacterProfile {
   };
   /** 用户追加的思考提示词（不替换原生，只在最后追加一段「用户额外要求」） */
   thinkingChainCustomPrompt?: string;
+
+  /**
+   * 虚拟世界「彼方」的个人状态：是否自主登入、登入间隔、各本小说的独立书签等。
+   * 独立于 proactiveConfig（主动发消息），互不挤占触发。
+   */
+  vrState?: VRWorldCharState;
 }
 
 export interface GroupProfile {
@@ -1185,6 +1424,30 @@ export interface UserProfile {
     name: string;
     avatar: string;
     bio: string;
+    /**
+     * 用户本人接入「彼方」的状态：捏的 chibi、此刻所在房间、在干嘛。可随时改。
+     * enabled=false（登出）时，聊天里给角色的"用户在彼方"提示词随之消失。
+     */
+    vrState?: UserVRState;
+}
+
+export interface UserVRState {
+    /** 是否接入彼方（登出后不再向角色注入"用户在彼方"提示） */
+    enabled: boolean;
+    /** 用户此刻把自己挂在哪个房间 */
+    currentRoom?: VRRoomId;
+    /** 用户自己写的"在彼方干嘛"，会注入聊天提示词 + 广播成行为卡片 */
+    activity?: string;
+    /** 最近一次更新时间 */
+    updatedAt?: number;
+    /** 用户在彼方里的 chibi 形象（同角色 chibi 结构，来自 mode="user" 的捏人器） */
+    chibi?: {
+        img: string;
+        state?: any;
+        scale?: number;
+        offsetY?: number;
+        flip?: boolean;
+    };
 }
 
 export interface Toast {
@@ -1623,15 +1886,26 @@ export interface GameActionOption {
 export interface GameLog {
     id: string;
     role: 'gm' | 'player' | 'character' | 'system';
-    speakerName?: string; 
+    speakerName?: string;
     content: string;
     timestamp: number;
     diceRoll?: {
         result: number;
         max: number;
-        check?: string; 
+        check?: string;
         success?: boolean;
     };
+    // 自动总结后，被归档折叠的日志会标记为 archived（不删除，UI 灰显折叠）
+    archived?: boolean;
+}
+
+// 自动总结产出的「前情提要」存档，像写小说一样记录起因经过结果与人物关系变化
+export interface GameSummary {
+    id: string;
+    content: string;       // 小说式总结（起因/经过/结果 + 人物关系变化）
+    logCount: number;      // 本段总结覆盖了多少条日志
+    logIds?: string[];     // 本段总结覆盖的日志 id（用于把原文与总结对应展示）
+    createdAt: number;
 }
 
 export interface GameSession {
@@ -1649,12 +1923,17 @@ export interface GameSession {
         inventory: string[];
     };
     sanityLocked?: boolean;
+    diceDisabled?: boolean;      // 关闭骰子：行动不再自动骰 D20，默认直接成功
+    // 归档模式：'auto' 满20条自动总结并送进角色 chatapp；'manual' 自动总结但不送，仅手动归档时送。
+    // 旧存档无此字段，按 'manual' 处理（不污染旧角色的聊天上下文）。
+    archiveMode?: 'auto' | 'manual';
     suggestedActions?: GameActionOption[];
+    summaries?: GameSummary[];   // 自动总结归档的前情提要
     createdAt: number;
     lastPlayedAt: number;
 }
 
-export type MessageType = 'text' | 'image' | 'emoji' | 'interaction' | 'transfer' | 'system' | 'social_card' | 'chat_forward' | 'xhs_card' | 'score_card' | 'music_card' | 'mcd_card' | 'commerce_card' | 'html_card' | 'news_card';
+export type MessageType = 'text' | 'image' | 'emoji' | 'interaction' | 'transfer' | 'system' | 'social_card' | 'chat_forward' | 'xhs_card' | 'score_card' | 'music_card' | 'mcd_card' | 'commerce_card' | 'html_card' | 'news_card' | 'vr_card' | 'trpg_card';
 
 export interface Message {
     id: number;
@@ -1720,6 +1999,14 @@ export interface FullBackupData {
     roomCustomAssets?: { id?: string; name: string; image: string; defaultScale: number; description?: string; visibility?: 'public' | 'character'; assignedCharIds?: string[] }[]; 
     
     novels?: NovelBook[];
+    vrNovels?: VRWorldNovel[];          // 虚拟世界「彼方」全局小说库
+    vrAnnotations?: VRNovelAnnotation[]; // 虚拟世界小说批注
+    customCreatorParts?: CustomCreatorPart[]; // 捏脸系统自定义部件
+    vrMusicRoom?: VRMusicRoomState;            // 听歌房共享状态
+    vrGuestbook?: VRGuestbookState;            // 留言簿共享状态
+    vrLetters?: VRLetter[];                    // 邮局信件（本地存档+队列）
+    vrSettings?: any[];                        // 彼方设置（独立 API + 调用记录）
+    vrPostOffice?: Record<string, string>;     // 邮局本机配置：身份 deviceId / 后端地址（存 localStorage）
     songs?: SongSheet[]; // Songwriting app data
     
     // Bank Data

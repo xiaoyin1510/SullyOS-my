@@ -29,40 +29,82 @@ const defaultGlobalConfig: ActiveMsg2GlobalConfig = {
   databaseUrl: '',
 };
 
-const openDB = (): Promise<IDBDatabase> => new Promise((resolve, reject) => {
-  const request = indexedDB.open(DB_NAME, DB_VERSION);
+// 单例连接缓存。同 utils/db.ts 的根因: 原本每个 op 都新开一条 ActiveMsg 连接且从不
+// close, 跟主库一起在并发下撑爆 Chromium backing store, 连带 SW 写 inbox 也失败。
+// 复用同一条连接, 并在连接被外部失效 (版本升级 / 浏览器强制关闭) 时清缓存自愈。
+let dbPromise: Promise<IDBDatabase> | null = null;
 
-  request.onerror = () => reject(request.error);
-  request.onblocked = () => {
-    // SW or another tab holds an older version; can't upgrade. Reject so callers don't hang.
-    reject(new Error('IndexedDB open blocked — close other tabs / unregister SW and retry'));
-  };
-  request.onsuccess = () => resolve(request.result);
-  request.onupgradeneeded = () => {
-    const db = request.result;
+const openDB = (): Promise<IDBDatabase> => {
+  if (dbPromise) return dbPromise;
 
-    if (!db.objectStoreNames.contains(STORE_KV)) {
-      db.createObjectStore(STORE_KV, { keyPath: 'id' });
-    }
+  const promise = new Promise<IDBDatabase>((resolve, reject) => {
+    const request = indexedDB.open(DB_NAME, DB_VERSION);
+    // onblocked 不是终态: 先 reject, 但底层 open request 还活着, 占用方关闭后仍会触发
+    // onsuccess。用 settled 标记 promise 已 settle, 让迟到的连接被 close 而非泄漏成
+    // 一条没人持有、却能 block 后续升级 / 删库的孤儿连接。
+    // 清缓存一律先比对 dbPromise === promise: onclose/onerror 等都是异步回调, 若期间已
+    // 重开并缓存了新 promise (如 SW withInboxTx 强关后重试), 陈旧连接的回调不能把新单例
+    // 误清, 否则又凭空多开一条连接 (见 amsg-sw 2.3.0 同款守卫)。
+    let settled = false;
 
-    if (!db.objectStoreNames.contains(STORE_INBOX)) {
-      db.createObjectStore(STORE_INBOX, { keyPath: 'messageId' });
-    }
+    request.onerror = () => {
+      if (dbPromise === promise) dbPromise = null; // 打开失败别缓存 rejected promise
+      settled = true;
+      reject(request.error);
+    };
+    request.onblocked = () => {
+      // SW or another tab holds an older version; can't upgrade. Reject so callers don't hang.
+      if (dbPromise === promise) dbPromise = null;
+      settled = true;
+      reject(new Error('IndexedDB open blocked — close other tabs / unregister SW and retry'));
+    };
+    request.onsuccess = () => {
+      const db = request.result;
+      // 已经 reject 过 (onblocked / onerror): 迟到的连接没人接收, 直接 close, 否则它开着
+      // 会 block 后续升级 / deleteDatabase。
+      if (settled) {
+        try { db.close(); } catch { /* ignore */ }
+        return;
+      }
+      // 另一个 tab / SW 升级版本时主动 close 让位 + 清缓存; 强制关闭时也清缓存自愈。
+      db.onversionchange = () => {
+        db.close();
+        if (dbPromise === promise) dbPromise = null;
+      };
+      db.onclose = () => {
+        if (dbPromise === promise) dbPromise = null;
+      };
+      resolve(db);
+    };
+    request.onupgradeneeded = () => {
+      const db = request.result;
 
-    // Phase 2 Round 1 stores (v1 → v2 migration is additive — no data touch on existing stores)
-    if (!db.objectStoreNames.contains(STORE_OUTBOUND_SESSIONS)) {
-      db.createObjectStore(STORE_OUTBOUND_SESSIONS, { keyPath: 'sessionId' });
-    }
+      if (!db.objectStoreNames.contains(STORE_KV)) {
+        db.createObjectStore(STORE_KV, { keyPath: 'id' });
+      }
 
-    if (!db.objectStoreNames.contains(STORE_PENDING_TOOL_CALLS)) {
-      db.createObjectStore(STORE_PENDING_TOOL_CALLS, { keyPath: 'sessionId' });
-    }
+      if (!db.objectStoreNames.contains(STORE_INBOX)) {
+        db.createObjectStore(STORE_INBOX, { keyPath: 'messageId' });
+      }
 
-    if (!db.objectStoreNames.contains(STORE_REASONING_BUFFER)) {
-      db.createObjectStore(STORE_REASONING_BUFFER, { keyPath: 'sessionId' });
-    }
-  };
-});
+      // Phase 2 Round 1 stores (v1 → v2 migration is additive — no data touch on existing stores)
+      if (!db.objectStoreNames.contains(STORE_OUTBOUND_SESSIONS)) {
+        db.createObjectStore(STORE_OUTBOUND_SESSIONS, { keyPath: 'sessionId' });
+      }
+
+      if (!db.objectStoreNames.contains(STORE_PENDING_TOOL_CALLS)) {
+        db.createObjectStore(STORE_PENDING_TOOL_CALLS, { keyPath: 'sessionId' });
+      }
+
+      if (!db.objectStoreNames.contains(STORE_REASONING_BUFFER)) {
+        db.createObjectStore(STORE_REASONING_BUFFER, { keyPath: 'sessionId' });
+      }
+    };
+  });
+
+  dbPromise = promise;
+  return promise;
+};
 
 const getKv = async <T>(id: string): Promise<T | null> => {
   const db = await openDB();

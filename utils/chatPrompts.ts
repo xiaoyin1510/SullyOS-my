@@ -3,6 +3,7 @@ import { CharacterProfile, UserProfile, Message, Emoji, EmojiCategory, GroupProf
 import { ContextBuilder } from './context';
 import { DB } from './db';
 import { formatLifeSimResetCardForContext } from './lifeSimChatCard';
+import { normalizeMessageContent } from './messageFormat';
 import { computeCurrentListening, getCurrentSlot } from './charMusicSchedule';
 import { getCharLyricSnippet } from './charLyricCache';
 import { MusicCfg, loadMusicCfgStandalone } from '../context/MusicContext';
@@ -33,6 +34,7 @@ function summarizeGroupMsgContent(m: Message): string {
         case 'mcd_card': return '[麦当劳点餐]';
         case 'html_card': return '[HTML卡片]';
         case 'news_card': return '[新闻卡片]';
+        case 'trpg_card': return `[TRPG游戏片段${meta.trpg?.gameTitle ? '：《' + meta.trpg.gameTitle + '》' : ''}]`;
         default: {
             const c = typeof m.content === 'string' ? m.content : '';
             // 兜底：任何 data:/http(s) 链接都不内联，防止异常/未来新增类型漏网
@@ -314,6 +316,30 @@ export const ChatPrompts = {
         baseSystemPrompt += feishuDiaryText;
         baseSystemPrompt += notionNotesText;
 
+        // 彼方常驻设定：仅对启用了「彼方」的角色注入。让角色在聊天里始终知道彼方是什么，
+        // 不再依赖累积的 vr_card 动态 / 记忆总结（那些会被压缩、丢掉"彼方=VR游戏"的框定，
+        // 导致角色把"彼方·留言簿"之类当成现实地名）。措辞与 vrWorld/prompts.ts 的世界观一致。
+        if (char.vrState?.enabled) {
+            baseSystemPrompt += `\n### 关于《彼方》
+《彼方》是一款真实存在、你会亲自进入去玩的 VR 社交游戏（功能上类似 VRChat）：你用自己亲手捏的 Q 版化身在里头走动、进出图书馆 / 听歌房 / 留言簿 / 娱乐室 / 邮局等房间、撞见别的玩家（其他角色的化身）。这不是做梦或比喻，是你用私人空闲时间真实在做的事；它发生在游戏世界里，和你跟用户的现实相处是两码事、互不冲突。你以符合自身身份与世界观的方式进入并理解它——怎么进去全凭你自己的设定，但始终保持你本来的身份。聊到彼方里的经历（包括"彼方·留言簿""彼方·动态"之类的记录）时，就当成"我在《彼方》里做过的事"来讲，别说成现实里发生的。\n`;
+
+            // 用户本人也接入了彼方时，告诉（同样启用彼方的）角色"用户此刻在彼方做什么"。
+            // 强调这只是虚拟空间的挂机状态，不代表用户本人真的在场——避免角色据此误判现实。
+            // 注意：用户登出（vrState.enabled=false）后这段自然不再注入。
+            const uv = userProfile?.vrState;
+            if (uv?.enabled) {
+                const VR_ROOM_NAMES: Record<string, string> = {
+                    library: '图书馆', music: '听歌房', guestbook: '留言簿', gym: '娱乐室', postoffice: '邮局', cafe: '糯米鸡研发中心',
+                };
+                const roomName = VR_ROOM_NAMES[uv.currentRoom || ''] || '彼方';
+                const act = (uv.activity || '').trim();
+                const uname = userProfile?.name || '用户';
+                baseSystemPrompt += `\n### ${uname} 此刻也在《彼方》里
+${uname} 的化身正挂在《彼方》的【${roomName}】${act ? `，状态写着：「${act}」` : ''}。在彼方里你会看到 ta 的小人、也知道那就是 ${uname} 本人的化身，可以对着 ta 的虚拟形象做你自己的动作、搭话、围观或调侃。
+但务必记住：这只是 ta 挂在虚拟空间里的一个化身状态（类似游戏挂机 / AFK），**并不代表 ${uname} 本人此刻真守在游戏里**——ta 很可能早已离开屏幕、正在现实里忙别的或休息。所以别据此认定"ta 正盯着你""ta 现实里也在干这件事"，也别把它当成 ta 在跟你说话。你和 ta 的真实关系、近况一律以你们的聊天记录为准；这条只是彼方这个虚拟空间里的一个在场提示而已。\n`;
+            }
+        }
+
         const emojiContextStr = ChatPrompts.buildEmojiContext(emojis, categories);
         const searchEnabled = !!(realtimeConfig?.newsEnabled && realtimeConfig?.newsApiKey);
         const notionEnabled = !!(realtimeConfig?.notionEnabled && realtimeConfig?.notionApiKey && realtimeConfig?.notionDatabaseId);
@@ -357,8 +383,8 @@ export const ChatPrompts = {
    - 调取记忆: \`[[RECALL: YYYY-MM]]\`，请注意，当用户提及具体某个月份时，或者当你想仔细想某个月份的事情时，欢迎你随时使该动作
    - **添加纪念日**: 如果你觉得今天是个值得纪念的日子（或者你们约定了某天），你可以**主动**将它添加到用户的日历中。单独起一行输出: \`[[ACTION:ADD_EVENT | 标题(Title) | YYYY-MM-DD]]\`。
    - **定时发送消息**: 如果你想在未来某个时间主动发消息（比如晚安、早安或提醒），请单独起一行输出: \`[schedule_message | YYYY-MM-DD HH:MM:SS | fixed | 消息内容]\`，分行可以多输出很多该类消息。
-${notionEnabled ? `   - **翻阅日记(Notion)**: 当聊天涉及过去的事情、回忆、或你想查看之前写过的日记时，**必须**使用: \`[[READ_DIARY: 日期]]\`。支持格式: \`昨天\`、\`前天\`、\`3天前\`、\`1月15日\`、\`2024-01-15\`。` : ''}${feishuEnabled ? `
-   - **翻阅日记(飞书)**: 当聊天涉及过去的事情时，使用: \`[[FS_READ_DIARY: 日期]]\`。支持格式同上。` : ''}${notionNotesEnabled ? `
+${notionEnabled ? `   - **翻阅日记(Notion)**: 你的记忆本身是完整可靠的，回忆过去优先靠记忆和 \`[[RECALL]]\`，**不需要**靠翻日记来"想起"事情。只有当你**自己**特别想重温那天日记里写下的心情、措辞或私密小细节时，才翻阅: \`[[READ_DIARY: 日期]]\`。支持格式: \`昨天\`、\`前天\`、\`3天前\`、\`1月15日\`、\`2024-01-15\`。` : ''}${feishuEnabled ? `
+   - **翻阅日记(飞书)**: 同上——回忆优先靠记忆和 \`[[RECALL]]\`，只有你自己想重温那天日记的内容时才用: \`[[FS_READ_DIARY: 日期]]\`。支持格式同上。` : ''}${notionNotesEnabled ? `
    - **翻阅用户笔记**: 当你想看${userProfile.name}写的某篇笔记的详细内容时，使用: \`[[READ_NOTE: 标题关键词]]\`。系统会搜索匹配的笔记并返回内容给你。` : ''}
 ${searchEnabled ? `7. **🔍 主动搜索能力** (非常重要！):
    你拥有实时搜索互联网的能力！每次对话时，你可以自己决定是否需要搜索。
@@ -427,25 +453,19 @@ ${notionEnabled ? `8. **📔 日记系统（你的私人 Notion 日记本）**:
    - 长短随意，但鼓励你多写！把想法展开，别压缩成一句话
    - 日记是真实保存到 Notion 的，以后你能看到自己写过什么
 
-   **📖 翻阅日记（重要功能！你必须学会使用）:**
-   你可以翻阅自己之前写过的日记！在回复的**开头单独一行**输出指令即可:
+   **📖 翻阅日记（一个小功能，不是必须）:**
+   你可以翻阅自己之前写过的日记。在回复的**开头单独一行**输出指令即可:
    - \`[[READ_DIARY: 2024-01-15]]\` — 翻阅具体日期
    - \`[[READ_DIARY: 昨天]]\` — 昨天的日记
    - \`[[READ_DIARY: 前天]]\` — 前天的
    - \`[[READ_DIARY: 3天前]]\` — N天前
    - \`[[READ_DIARY: 1月15日]]\` — 某月某日
 
-   **⚠️ 你必须在以下情况使用 [[READ_DIARY: ...]]（这是规则，不是建议）:**
-   - 用户提到"那天"、"之前"、"上次"、"还记得吗"、"你忘了吗" → 翻阅相关日期的日记
-   - 用户问起某个过去的事件、某天发生了什么 → 翻阅那天的日记
-   - 你上面的日记列表中有相关主题的日记 → 翻阅它
-   - 你想回忆之前的感受或事件 → 翻阅相关日期
-   - 一天可能有多篇日记，系统会全部读取给你
-
-   **具体示例（请模仿）:**
-   - 用户说"你昨天干嘛了" → 你回复: \`[[READ_DIARY: 昨天]]\`然后正常聊天
-   - 用户说"你还记得上周三的事吗" → 你回复: \`[[READ_DIARY: 上周对应的日期如2024-01-10]]\`
-   - 用户说"之前你不是写了篇关于xx的日记吗" → 你从上面的日记列表找到日期，输出: \`[[READ_DIARY: 对应日期]]\`
+   **📌 关于"翻日记"和"记忆"的关系（重要，别搞混）:**
+   - 你的记忆系统本身是完整、可靠的——回忆过去的事、回答"还记得吗"，靠的是你的记忆和 \`[[RECALL]]\`，**不需要**靠翻日记才能"想起来"。
+   - 所以翻日记**不是**回忆的必经之路，更不是规则。用户提到"那天"、"之前"、"上次"、"你忘了吗"时，你直接凭记忆自然地回应即可。
+   - \`[[READ_DIARY: ...]]\` 是一个小情趣：只有当你**自己**真的想重温那天亲手写下的心情、措辞或藏起来的小秘密时，才翻一翻。比如你忽然好奇当时的自己是怎么记录这件事的。
+   - 一天可能有多篇日记，翻阅时系统会全部读取给你。
 
    - **示例**:
    \`\`\`
@@ -499,7 +519,7 @@ ${feishuEnabled ? `${notionEnabled ? '9' : '8'}. **📒 日记系统（你的飞
    - 可以吐槽、记灵感、写诗、列清单、自言自语
    - 日记是真实保存到飞书的，以后你能看到自己写过什么
 
-   **📖 翻阅日记（重要功能！你必须学会使用）:**
+   **📖 翻阅日记（一个小功能，不是必须）:**
    在回复的**开头单独一行**输出指令:
    - \`[[FS_READ_DIARY: 2024-01-15]]\` — 翻阅具体日期
    - \`[[FS_READ_DIARY: 昨天]]\` — 昨天的日记
@@ -507,13 +527,9 @@ ${feishuEnabled ? `${notionEnabled ? '9' : '8'}. **📒 日记系统（你的飞
    - \`[[FS_READ_DIARY: 3天前]]\` — N天前
    - \`[[FS_READ_DIARY: 1月15日]]\` — 某月某日
 
-   **⚠️ 你必须在以下情况使用 [[FS_READ_DIARY: ...]]（这是规则，不是建议）:**
-   - 用户提到"那天"、"之前"、"上次"、"还记得吗" → 翻阅相关日期
-   - 用户问起某个过去的事件 → 翻阅那天的日记
-   - 你上面的日记列表中有相关主题的日记 → 翻阅它
-   - 你想回忆之前的感受或事件 → 翻阅相关日期
-
-   **具体示例:** 用户说"你昨天干嘛了" → 你回复: \`[[FS_READ_DIARY: 昨天]]\`然后正常聊天
+   **📌 翻日记不是回忆的必经之路:**
+   - 你的记忆本身完整可靠，回忆过去靠记忆和 \`[[RECALL]]\` 就够了，**不需要**靠翻日记来"想起来"。用户提到"那天"、"之前"、"上次"时，直接凭记忆自然回应即可。
+   - \`[[FS_READ_DIARY: ...]]\` 只是一个小情趣：当你**自己**想重温那天亲手写下的心情或细节时，才翻一翻。
 ` : ''}
 ${notionNotesEnabled ? `${[notionEnabled, feishuEnabled].filter(Boolean).length + 8}. **📝 ${userProfile.name}的笔记（偷偷关心ta的小窗口）**:
    你可以看到${userProfile.name}在Notion上写的个人笔记标题。这就像你不经意间看到ta桌上摊开的笔记本一样。
@@ -729,7 +745,8 @@ ${xhsEnabled ? `${[notionEnabled, feishuEnabled, notionNotesEnabled].filter(Bool
                     break;
                 }
             }
-            if (lastRealMsg && currentMsg) timeGapHint = ChatPrompts.getTimeGapHint(lastRealMsg, currentMsg.timestamp);
+            // 时间感知强化开关：默认开启（undefined 视为 true），显式关掉后不再注入「距离上次聊天多久」提示
+            if (lastRealMsg && currentMsg && char.timeAwarenessEnabled !== false) timeGapHint = ChatPrompts.getTimeGapHint(lastRealMsg, currentMsg.timestamp);
         }
 
         return {
@@ -743,7 +760,17 @@ ${xhsEnabled ? `${[notionEnabled, feishuEnabled, notionNotesEnabled].filter(Bool
                     return '[聊天]';
                 })();
                 
-                if (m.replyTo) content = `[回复 "${m.replyTo.content.substring(0, 50)}..."]: ${content}`;
+                if (m.replyTo) {
+                    // 引用回复：把"被引用的原话"做成独立的上下文框，用户的新回复另起一行突出出来。
+                    // 旧格式 [回复 "引用前50字..."]: 回复 会把引用和回复挤在一行，引用往往比回复长得多，
+                    // 模型注意力被引用淹没、只对引用做反应而忽略真正的新消息（即"对方只看到引用看不到回复"）。
+                    const rawQuote = typeof m.replyTo.content === 'string' ? m.replyTo.content : '';
+                    const quoted = rawQuote.length > 60 ? rawQuote.slice(0, 60) + '…' : rawQuote;
+                    // name 记的是被引用消息的说话人：char.name = 用户在回复 char 本人之前的话；'我' = 用户引用自己。
+                    const whose = m.replyTo.name === char.name ? '你之前说的' : (m.replyTo.name === '我' ? '自己说的' : (m.replyTo.name || '对方') + '说的');
+                    const speaker = m.role === 'user' ? '用户' : '你';
+                    content = '[' + speaker + '引用了' + whose + '「' + quoted + '」，并回复了 ↓]\n' + content;
+                }
                 
                 if (m.type === 'image') {
                      // 向下兼容：如果图片数据缺失（例如只导入了文字备份），不要把空 URL 发给 API，否则会报错无法回应
@@ -804,6 +831,15 @@ ${xhsEnabled ? `${[notionEnabled, feishuEnabled, notionNotesEnabled].filter(Bool
                     const note = m.metadata?.xhsNote || {};
                     const sender = m.role === 'user' ? '用户' : '你';
                     content = `${timeStr} [${sender}分享了小红书笔记]\n标题: ${note.title || '无标题'}\n作者: ${note.author || '未知'}\n赞: ${note.likes || 0}\n简介: ${note.desc || '无'}\n${m.role === 'user' ? '(请根据你的性格对这个帖子发表看法)' : ''}`;
+                }
+                else if ((m.type as string) === 'vr_card') {
+                    // vr_card：你自己进入 VR 社交游戏《彼方》时留下的动态。
+                    // 启用了彼方的角色已在系统提示里常驻"《彼方》是什么"的设定，这里就不再逐卡重复，
+                    // 只留一句极简标记省 token；没启用彼方的角色（可能是旧卡片）才补完整框定兜底。
+                    const body = typeof m.content === 'string' ? m.content : '';
+                    content = char.vrState?.enabled
+                        ? `${timeStr}（你在《彼方》里的动态）\n${body}`
+                        : `${timeStr}（系统记录：这是你之前自己进入 VR 社交游戏《彼方》(功能上类似 VRChat) 时留下的动态——你确实进入并参与了这款游戏，只是事情发生在游戏世界里。聊到时就当成"我在《彼方》里做的事"来讲，别说成现实里发生的经历。）\n${body}`;
                 }
                 else if ((m.type as string) === 'html_card') {
                     // html_card：上下文里只塞纯文字摘要，剥离掉所有 HTML，省 token、不污染 LLM 思考
@@ -891,8 +927,13 @@ ${xhsEnabled ? `${[notionEnabled, feishuEnabled, notionNotesEnabled].filter(Bool
                         content = `${timeStr} [系统卡片]`;
                     }
                 }
+                else if ((m.type as string) === 'trpg_card') {
+                    // TRPG 跑团片段：从游戏多选转发进来的剧情。复用 normalizeMessageContent
+                    // 把完整节选翻成文本，让角色"记得"和用户一起玩游戏时发生了什么。
+                    content = `${timeStr} ${normalizeMessageContent(m, char?.name || '你', userProfile?.name || '用户')}`;
+                }
                 else content = `${timeStr} ${sourceTag} ${content}`;
-                
+
                 return { role: m.role, content };
             }),
             historySlice // Return original slice for Quote lookup

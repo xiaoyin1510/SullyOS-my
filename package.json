@@ -30,7 +30,7 @@
     "@rei-standard/amsg-instant": "0.9.0",
     "@rei-standard/amsg-server": "2.5.0",
     "@rei-standard/amsg-shared": "0.2.0",
-    "@rei-standard/amsg-sw": "2.2.0",
+    "@rei-standard/amsg-sw": "2.3.0",
     "jszip": "^3.10.1",
     "pg": "^8.20.0",
     "react": "^18.2.0",

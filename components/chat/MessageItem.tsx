@@ -1447,6 +1447,115 @@ const MessageItem = React.memo(({
         );
     }
 
+    if (m.type === 'vr_card') {
+        const md: any = m.metadata || {};
+        const roomNameMap: Record<string, string> = {
+            library: '图书馆', music: '听歌房', guestbook: '留言簿', gym: '娱乐室', postoffice: '邮局',
+        };
+        const roomInfo = { name: roomNameMap[md.room] || '彼方' };
+        const activity: string = md.activity || '在彼方度过了一段时间。';
+        const excerpts: string[] = Array.isArray(md.annotationExcerpts) ? md.annotationExcerpts : [];
+        const timeStr = new Date(m.timestamp).toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit' });
+        const card = (
+            <div className="w-64">
+                <div
+                    className="rounded-xl overflow-hidden border border-indigo-300/40 shadow-[0_4px_16px_rgba(60,40,120,0.22)]"
+                    style={{ background: 'linear-gradient(155deg,#2a2350 0%,#1b1838 100%)' }}
+                >
+                    {/* 头部：彼方 · 房间 */}
+                    <div className="px-3 pt-2.5 pb-2 flex items-center gap-2 border-b border-white/10">
+                        <span className="text-base leading-none text-indigo-200/80" style={{ filter: 'drop-shadow(0 0 5px rgba(170,180,255,.6))' }}>✦</span>
+                        <div className="flex-1 min-w-0">
+                            <div className="text-[9px] tracking-[0.25em] text-indigo-300/80 font-bold uppercase">彼方 · 动态</div>
+                            <div className="text-[12px] text-indigo-100 font-semibold truncate">{roomInfo.name}{md.novelTitle ? ` · 《${md.novelTitle}》` : ''}</div>
+                        </div>
+                        <span className="text-[9px] text-indigo-300/60">{timeStr}</span>
+                    </div>
+                    {/* 活动播报 */}
+                    <div className="px-3 py-2.5">
+                        <p className="text-[12.5px] leading-[1.5] text-indigo-50/95">
+                            {md.userBoardPost
+                                ? activity
+                                : <><span className="font-bold text-amber-200">{charName || 'Ta'}</span> {activity}</>}
+                        </p>
+                        {excerpts.length > 0 && (
+                            <div className="mt-2 space-y-1">
+                                {excerpts.map((ex, i) => (
+                                    <div key={i} className="text-[11px] leading-snug text-indigo-200/80 pl-2 border-l-2 border-amber-300/50">
+                                        {ex}
+                                    </div>
+                                ))}
+                            </div>
+                        )}
+                        {/* 留言簿：把角色在墙上留的原话也显示出来 */}
+                        {Array.isArray(md.boardPosts) && md.boardPosts.length > 0 && (
+                            <div className="mt-2 space-y-1">
+                                {md.boardPosts.map((p: any, i: number) => (
+                                    <div key={i} className="text-[11px] leading-snug text-indigo-100/90 pl-2 border-l-2 border-indigo-300/50">
+                                        {p?.replyToName && <span className="text-indigo-300/70">回 {p.replyToName}：</span>}{p?.content}
+                                    </div>
+                                ))}
+                            </div>
+                        )}
+                    </div>
+                    {/* 页脚 */}
+                    <div className="px-3 py-1.5 border-t border-white/10 flex items-center justify-between">
+                        <span className="text-[9px] text-indigo-300/60 italic">{md.userBoardPost ? '你发布到留言墙' : 'Ta 独自度过的时间'}</span>
+                        <span className="text-[9px] text-amber-200/70 font-bold tracking-wide">{md.userBoardPost ? '彼方' : '＋记忆'}</span>
+                    </div>
+                </div>
+            </div>
+        );
+        return commonLayout(card);
+    }
+
+    if (m.type === 'trpg_card') {
+        const t: any = m.metadata?.trpg || {};
+        const gameTitle: string = t.gameTitle || 'TRPG 跑团';
+        const partyNames: string[] = Array.isArray(t.partyNames) ? t.partyNames.filter((n: string) => n && n !== charName) : [];
+        const excerpt: Array<{ speaker?: string; text?: string; role?: string }> = Array.isArray(t.excerpt) ? t.excerpt : [];
+        const card = (
+            <div className="w-72">
+                <div
+                    className="rounded-2xl overflow-hidden border border-purple-300/30 shadow-[0_6px_20px_rgba(70,40,110,0.28)]"
+                    style={{ background: 'linear-gradient(155deg,#2c1c44 0%,#1a1230 100%)' }}
+                >
+                    {/* 头部 */}
+                    <div className="px-3.5 pt-3 pb-2.5 flex items-center gap-2.5 border-b border-white/10">
+                        <div className="w-7 h-7 rounded-lg flex items-center justify-center shrink-0" style={{ background: 'linear-gradient(135deg,#a855f7,#ec4899)' }}>
+                            <svg viewBox="0 0 24 24" fill="none" className="w-4 h-4 text-white"><path d="M12 2 4 6v6c0 5 3.4 8.5 8 10 4.6-1.5 8-5 8-10V6l-8-4Z" stroke="currentColor" strokeWidth="1.6" strokeLinejoin="round"/></svg>
+                        </div>
+                        <div className="flex-1 min-w-0">
+                            <div className="text-[9px] tracking-[0.25em] text-purple-300/80 font-bold uppercase">TRPG · 一起玩的游戏</div>
+                            <div className="text-[13px] text-purple-50 font-semibold truncate font-serif">{gameTitle}</div>
+                        </div>
+                    </div>
+                    {/* 剧情节选 */}
+                    <div className="px-3.5 py-3 space-y-2 max-h-60 overflow-hidden">
+                        {excerpt.length === 0 && <p className="text-[12px] text-purple-200/70 italic">一段冒险剧情</p>}
+                        {excerpt.slice(0, 6).map((e, i) => {
+                            const isGM = e.role === 'gm';
+                            const text = (e.text || '').replace(/^\*|\*$/g, '').trim();
+                            return (
+                                <div key={i} className={`text-[12px] leading-relaxed ${isGM ? 'text-purple-100/90 italic' : 'text-purple-50/95'}`}>
+                                    {!isGM && e.speaker && <span className="text-pink-300/90 font-semibold mr-1">{e.speaker}:</span>}
+                                    <span className={isGM ? 'border-l-2 border-purple-400/40 pl-2 block' : ''}>{text}</span>
+                                </div>
+                            );
+                        })}
+                        {excerpt.length > 6 && <div className="text-[10px] text-purple-300/60 text-center pt-0.5">…共 {excerpt.length} 条剧情</div>}
+                    </div>
+                    {/* 页脚 */}
+                    <div className="px-3.5 py-2 border-t border-white/10 flex items-center justify-between">
+                        <span className="text-[9px] text-purple-300/70 italic truncate">{partyNames.length ? `与 ${partyNames.join('、')} 同行` : '我们的冒险'}</span>
+                        <span className="text-[9px] text-pink-200/80 font-bold tracking-wide shrink-0 ml-2">＋共同回忆</span>
+                    </div>
+                </div>
+            </div>
+        );
+        return commonLayout(card);
+    }
+
     if (m.type === 'news_card') {
         const md: any = m.metadata || {};
         const title: string = md.title || '热点';

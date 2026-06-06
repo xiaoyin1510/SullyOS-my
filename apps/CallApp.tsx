@@ -569,7 +569,10 @@ const CallApp: React.FC = () => {
   };
   const loadCallRecords = async (charId?: string) => {
     if (!charId) return setCallRecords([]);
-    const all = await DB.getMessagesByCharId(charId);
+    // includeProcessed=true：通话消息与聊天消息同存一个 store，记忆宫殿处理后会推进
+    // 高水位标记 mp_lastMsgId_<charId>，默认的 getMessagesByCharId 会过滤掉水位线之前的
+    // 消息——这会导致继续聊天后通话记录被"清空"。这里必须读取全部消息。
+    const all = await DB.getMessagesByCharId(charId, true);
     const callMsgs = all
       .filter(m => m.metadata?.source === 'call' && m.metadata?.callSessionId)
       .sort((a, b) => a.timestamp - b.timestamp);
@@ -691,7 +694,7 @@ const CallApp: React.FC = () => {
         temperature: 0.85,
         stream: false,
       }),
-    });
+    }, 2, 0, { appName: '电话', charId: selectedChar?.id, charName: selectedChar?.name, purpose: '语音通话' });
     const assistantText = chatData?.choices?.[0]?.message?.content?.trim() || '';
     if (!assistantText) throw new Error('文本接口返回为空');
     return assistantText;
@@ -920,7 +923,8 @@ const CallApp: React.FC = () => {
     const record = deleteConfirmRecord;
     if (!record) return;
     setDeleteConfirmRecord(null);
-    const all = await DB.getMessagesByCharId(record.characterId);
+    // includeProcessed=true：同 loadCallRecords，否则水位线之前的通话消息删不掉
+    const all = await DB.getMessagesByCharId(record.characterId, true);
     // 删除通话消息 + 聊天页的通话总结卡片
     const ids = all.filter(m => {
       if (m.metadata?.source === 'call' && m.metadata?.callSessionId === record.sessionId) return true;

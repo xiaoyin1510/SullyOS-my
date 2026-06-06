@@ -49,8 +49,23 @@ import { installReiSW } from '@rei-standard/amsg-sw';
  *           和 WebPush backup 统一在包层 showNotification 前去重。
  *  - 1.14.0: 升级 amsg-sw dedupe 语义：去重记录区分业务处理与通知展示，
  *           SSE-first 且前台未展示通知时，WebPush backup 可在隐藏态只补通知。
+ *  - 1.15.0: IndexedDB 连接韧性整治（修 Instant Push 确认超时）。
+ *           1) openInboxDb 改单例复用 + onversionchange/onclose 失效自愈 —— 之前每条 push
+ *              都新开一条 ActiveMsg 连接且从不 close，与主库 (utils/db.ts) 的连接风暴一起
+ *              撑爆 Chromium backing store，导致写 inbox 失败、永不 active-msg-received、超时。
+ *           2) openInboxDb 的所有事务过 withInboxTx：onclose 清缓存是异步的，强关到回调之间
+ *              命中 fast-path 会拿到将死连接、db.transaction() 同步抛 InvalidStateError，事务层
+ *              兜一次「清缓存重开重试」(同 amsg-sw 2.3.0 的 withDedupeStore)。
+ *           3) openInboxDb 修 blocked-then-unblocked 连接泄漏：onblocked 先 reject 但底层 open
+ *              还活着，占用方关闭后 onsuccess 仍触发、留下能 block 升级/删库的孤儿连接；加
+ *              settled 标记让迟到的 onsuccess 直接 close。
+ *           4) 升级 amsg-sw 2.2.0 → 2.3.0：包侧 dedupe/queue/multipart 连接补 onclose + 事务级
+ *              InvalidStateError 重开兜底；DELIVER ack 新增 businessError，落库失败 ok:true 仍带
+ *              错误，前台据此把超时文案精确化。
+ *  - 1.15.1: 临时加 instant push trace，定位 iOS PWA 后台导致的 SSE Load failed / backup push
+ *            / SW inbox 落库时序。
  */
-const SW_VERSION = '1.14.0';
+const SW_VERSION = '1.15.1';
 
 const PING_INTERVAL = 15_000;
 const MAX_MANUAL_ALIVE_MS = 5 * 60_000;
@@ -74,12 +89,45 @@ const proactiveTimers = new Map<string, number>();
 
 const sw = self as unknown as ServiceWorkerGlobalScope;
 
+function summarizeAmsgPayload(payload: any): Record<string, any> {
+  return {
+    messageKind: payload?.messageKind ?? 'content',
+    messageType: payload?.messageType,
+    messageId: payload?.messageId,
+    sessionId: payload?.sessionId,
+    charId: payload?.metadata?.charId,
+    chunk: payload?.messageIndex,
+    total: payload?.totalMessages,
+    hasBlob: payload?._blob === true,
+  };
+}
+
+function traceSw(event: string, payload?: any, extra: Record<string, any> = {}) {
+  try {
+    console.log('[InstantTrace:SW]', {
+      ts: new Date().toISOString(),
+      event,
+      ...(payload !== undefined ? summarizeAmsgPayload(payload) : {}),
+      ...extra,
+    });
+  } catch { /* ignore */ }
+}
+
 installReiSW(sw, {
   defaultIcon: './icons/icon-192.png',
   defaultBadge: './icons/icon-192.png',
   multipart: { enabled: true },
   onBusinessPayload: async (payload: any) => {
-    await saveIncomingActiveMessage(payload);
+    traceSw('business-payload-start', payload);
+    try {
+      await saveIncomingActiveMessage(payload);
+      traceSw('business-payload-done', payload);
+    } catch (e) {
+      traceSw('business-payload-error', payload, {
+        error: e instanceof Error ? e.message : String(e),
+      });
+      throw e;
+    }
   },
 });
 
@@ -135,6 +183,12 @@ function stopKeepAlive() {
 
 async function notifyClients(data: Record<string, any>) {
   const clients = await sw.clients.matchAll({ type: 'window', includeUncontrolled: true });
+  traceSw('notify-clients', undefined, {
+    type: data.type,
+    charId: data.charId,
+    sessionId: data.sessionId,
+    count: clients.length,
+  });
   for (const client of clients) {
     client.postMessage(data);
   }
@@ -195,17 +249,56 @@ function readPushPayload(event: PushEvent): any | null {
   }
 }
 
-function openInboxDb(): Promise<IDBDatabase> {
-  return new Promise((resolve, reject) => {
-    const request = indexedDB.open(ACTIVE_MSG_DB_NAME, ACTIVE_MSG_DB_VERSION);
+// 单例连接缓存。SW 原本每条 push 都新开一条 ActiveMsg 连接且从不 close —— 在主库
+// (utils/db.ts) 连接风暴撑爆 Chromium backing store 后, 这里 open 同样失败 →
+// saveContentToInbox 抛错 → 永不 notifyClients('active-msg-received') → 主线程 Instant
+// Push 等不到落库确认而超时。复用同一条连接, 失效 (版本升级 / 浏览器强制关闭) 时清
+// 缓存自愈, 下条 push 自动重开。
+let inboxDbPromise: Promise<IDBDatabase> | null = null;
 
-    request.onerror = () => reject(request.error);
+function openInboxDb(): Promise<IDBDatabase> {
+  if (inboxDbPromise) return inboxDbPromise;
+
+  const promise = new Promise<IDBDatabase>((resolve, reject) => {
+    const request = indexedDB.open(ACTIVE_MSG_DB_NAME, ACTIVE_MSG_DB_VERSION);
+    // onblocked 不是终态: 先 reject, 但底层 open request 还活着, 占用方关闭后仍会触发
+    // onsuccess。用 settled 标记 promise 已 settle, 让迟到的连接被 close 而非泄漏成
+    // 一条没人持有、却能 block 后续升级 / 删库的孤儿连接。
+    // 清缓存一律先比对 inboxDbPromise === promise: onclose/onerror 都是异步回调 —— 尤其
+    // withInboxTx 强关后会清缓存并重开新 promise, 此时陈旧连接的迟到 onclose 不能把新单例
+    // 误清 (否则又凭空多开一条连接, 正是本次要消灭的 churn; 见 amsg-sw 2.3.0 同款守卫)。
+    let settled = false;
+
+    request.onerror = () => {
+      if (inboxDbPromise === promise) inboxDbPromise = null; // 打开失败别缓存 rejected promise
+      settled = true;
+      reject(request.error);
+    };
     request.onblocked = () => {
       // Main thread or another SW connection holds the DB at a lower version and isn't closing.
       // Push will fail to persist; reject rather than hang forever so event.waitUntil unblocks.
+      if (inboxDbPromise === promise) inboxDbPromise = null;
+      settled = true;
       reject(new Error('IndexedDB open blocked (older version still open elsewhere)'));
     };
-    request.onsuccess = () => resolve(request.result);
+    request.onsuccess = () => {
+      const db = request.result;
+      // 已经 reject 过 (onblocked / onerror): 迟到的连接没人接收, 直接 close, 否则它开着
+      // 会 block 后续升级 / deleteDatabase。
+      if (settled) {
+        try { db.close(); } catch { /* ignore */ }
+        return;
+      }
+      // 主线程升级版本时 close 让位 + 清缓存; 浏览器强制关闭连接时也清缓存自愈。
+      db.onversionchange = () => {
+        db.close();
+        if (inboxDbPromise === promise) inboxDbPromise = null;
+      };
+      db.onclose = () => {
+        if (inboxDbPromise === promise) inboxDbPromise = null;
+      };
+      resolve(db);
+    };
     request.onupgradeneeded = () => {
       const db = request.result;
       if (!db.objectStoreNames.contains(ACTIVE_MSG_INBOX_STORE)) {
@@ -225,6 +318,52 @@ function openInboxDb(): Promise<IDBDatabase> {
       }
     };
   });
+
+  inboxDbPromise = promise;
+  return promise;
+}
+
+function isInboxConnectionClosingError(error: unknown): boolean {
+  if (!error || typeof error !== 'object') return false;
+  const e = error as { name?: string; message?: string };
+  return e.name === 'InvalidStateError' || /connection is closing/i.test(String(e.message || ''));
+}
+
+// 事务级一次重开兜底。单例的 onclose 清缓存是异步的: 连接被浏览器强关到 onclose 回调
+// 跑之间, 命中 fast-path 的调用方会拿到一条将死的连接, db.transaction() 同步抛
+// InvalidStateError —— 此时 saveContentToInbox 会在写 inbox / fire active-msg-received 前
+// 就挂掉, push 静默丢、主线程超时。这里捕获该错误后清缓存、重开一次、重试一次
+// (镜像 amsg-sw 2.3.0 的 withDedupeStore), 守住这条关键路径。重试上限 1 次; 失败的
+// 事务不会 commit, 故 run() 重跑是幂等的 (含 read-modify-write)。
+async function withInboxTx(
+  storeName: string,
+  mode: IDBTransactionMode,
+  run: (store: IDBObjectStore) => void,
+): Promise<void> {
+  for (let attempt = 0; attempt < 2; attempt++) {
+    const db = await openInboxDb();
+    try {
+      return await new Promise<void>((resolve, reject) => {
+        let tx: IDBTransaction;
+        try {
+          tx = db.transaction(storeName, mode);
+        } catch (e) {
+          reject(e); // 连接 closing 时 db.transaction() 同步抛, 交给下面的重试判定
+          return;
+        }
+        tx.oncomplete = () => resolve();
+        tx.onerror = () => reject(tx.error || new Error(`inbox tx error (${storeName})`));
+        tx.onabort = () => reject(tx.error || new Error(`inbox tx aborted (${storeName})`));
+        run(tx.objectStore(storeName));
+      });
+    } catch (e) {
+      if (attempt === 0 && isInboxConnectionClosingError(e)) {
+        inboxDbPromise = null; // 丢掉将死的缓存连接, 下一轮 openInboxDb 重开
+        continue;
+      }
+      throw e;
+    }
+  }
 }
 
 // ─── content / inbox (kind=content 老路径, tool_request 的 prefix 也走这里) ───
@@ -248,12 +387,13 @@ async function saveContentToInbox(payload: any) {
   //   - body 空 + directives 非空 = directive-only push (LLM 只输 [[ACTION:POKE]] 等)
   //   - body 空 + directives 空 = worker bug 推白条 → 写一条空 entry, flushInbox 跑空管线无害,
   //     最多让 OSContext 弹一句默认 toast. 这种 case 应该在 worker 端修, SW 不二次验证契约.
-  if (!charId) return;
+  if (!charId) {
+    traceSw('content-drop-no-char', payload);
+    return;
+  }
 
-  const db = await openInboxDb();
-  await new Promise<void>((resolve, reject) => {
-    const tx = db.transaction(ACTIVE_MSG_INBOX_STORE, 'readwrite');
-    tx.objectStore(ACTIVE_MSG_INBOX_STORE).put({
+  await withInboxTx(ACTIVE_MSG_INBOX_STORE, 'readwrite', (store) => {
+    store.put({
       messageId,
       charId,
       charName,
@@ -275,9 +415,8 @@ async function saveContentToInbox(payload: any) {
       sentAt,
       receivedAt: Date.now(),
     });
-    tx.oncomplete = () => resolve();
-    tx.onerror = () => reject(tx.error);
   });
+  traceSw('inbox-content-saved', payload, { bodyChars: body.length });
 
   await notifyClients({
     type: 'active-msg-received',
@@ -295,22 +434,24 @@ async function saveReasoningToBuffer(payload: any) {
   const sessionId: string | undefined = payload?.sessionId;
   const charId: string | undefined = payload?.metadata?.charId;
   const reasoningContent: string = String(payload?.reasoningContent ?? '');
-  if (!sessionId || !charId || !reasoningContent) return;
+  if (!sessionId || !charId || !reasoningContent) {
+    traceSw('reasoning-drop-incomplete', payload, {
+      hasSessionId: !!sessionId,
+      hasCharId: !!charId,
+      chars: reasoningContent.length,
+    });
+    return;
+  }
 
-  const db = await openInboxDb();
-  await new Promise<void>((resolve, reject) => {
-    const tx = db.transaction(ACTIVE_MSG_REASONING_BUFFER_STORE, 'readwrite');
-    const store = tx.objectStore(ACTIVE_MSG_REASONING_BUFFER_STORE);
+  await withInboxTx(ACTIVE_MSG_REASONING_BUFFER_STORE, 'readwrite', (store) => {
     store.put({
       sessionId,
       charId,
       reasoningContent,
       receivedAt: Date.now(),
     });
-    tx.oncomplete = () => resolve();
-    tx.onerror = () => reject(tx.error);
-    tx.onabort = () => reject(tx.error || new Error('reasoning buffer write aborted'));
   });
+  traceSw('reasoning-buffer-saved', payload, { chars: reasoningContent.length });
 
   // reasoning push 与 content push 是两条独立 Web Push, 到达/处理顺序不保证. 主线程只在处理
   // "首条 content" 时 claimReasoning, 若 content 抢先落库, reasoning 会变孤儿、思维链丢失.
@@ -326,13 +467,8 @@ async function saveReasoningToBuffer(payload: any) {
  */
 async function clearReasoningBuffer(sessionId: string) {
   if (!sessionId) return;
-  const db = await openInboxDb();
-  await new Promise<void>((resolve, reject) => {
-    const tx = db.transaction(ACTIVE_MSG_REASONING_BUFFER_STORE, 'readwrite');
-    tx.objectStore(ACTIVE_MSG_REASONING_BUFFER_STORE).delete(sessionId);
-    tx.oncomplete = () => resolve();
-    tx.onerror = () => reject(tx.error);
-    tx.onabort = () => reject(tx.error || new Error('reasoning buffer clear aborted'));
+  await withInboxTx(ACTIVE_MSG_REASONING_BUFFER_STORE, 'readwrite', (store) => {
+    store.delete(sessionId);
   });
 }
 
@@ -354,10 +490,8 @@ async function savePendingToolCall(payload: any) {
   // 客户端 /continue 时取它 + 1; 多轮 tool 链路里 iteration 单调递增, worker 也按它做 fail-fast 400.
   const iteration = Number.isFinite(payload?.metadata?.iteration) ? Number(payload.metadata.iteration) : 0;
 
-  const db = await openInboxDb();
-  await new Promise<void>((resolve, reject) => {
-    const tx = db.transaction(ACTIVE_MSG_PENDING_TOOL_CALLS_STORE, 'readwrite');
-    tx.objectStore(ACTIVE_MSG_PENDING_TOOL_CALLS_STORE).put({
+  await withInboxTx(ACTIVE_MSG_PENDING_TOOL_CALLS_STORE, 'readwrite', (store) => {
+    store.put({
       sessionId,
       charId,
       toolCalls,
@@ -365,8 +499,6 @@ async function savePendingToolCall(payload: any) {
       iteration,
       createdAt: Date.now(),
     });
-    tx.oncomplete = () => resolve();
-    tx.onerror = () => reject(tx.error);
   });
 }
 
@@ -409,13 +541,14 @@ async function saveEmotionUpdateToInbox(payload: any) {
   // emotionRaw 允许为空: worker 评估失败/返回空时也会推一条 "done" 信号 (emotionRaw=''),
   // 仍需写 inbox + notify, 让客户端 flush 时 fire 'instant-emotion-done' 熄灭 "情绪分析中" 徽章.
   const emotionRaw = payload?.metadata?.emotionRaw || '';
-  if (!charId) return;
+  if (!charId) {
+    traceSw('emotion-drop-no-char', payload);
+    return;
+  }
   const messageId = String(payload?.messageId || `${charId}-emotion-${Date.now()}`);
 
-  const db = await openInboxDb();
-  await new Promise<void>((resolve, reject) => {
-    const tx = db.transaction(ACTIVE_MSG_INBOX_STORE, 'readwrite');
-    tx.objectStore(ACTIVE_MSG_INBOX_STORE).put({
+  await withInboxTx(ACTIVE_MSG_INBOX_STORE, 'readwrite', (store) => {
+    store.put({
       messageId,
       charId,
       charName: payload?.contactName || '',
@@ -425,9 +558,8 @@ async function saveEmotionUpdateToInbox(payload: any) {
       sentAt: Date.now(),
       receivedAt: Date.now(),
     });
-    tx.oncomplete = () => resolve();
-    tx.onerror = () => reject(tx.error);
   });
+  traceSw('inbox-emotion-saved', payload, { emotionChars: String(emotionRaw).length });
 
   // 触发客户端 flush (不带真实内容, 客户端 flush 时按 messageType 静默处理). 不 showNotification.
   await notifyClients({ type: 'active-msg-received', charId, charName: payload?.contactName || '', body: '', emotionUpdate: true });
@@ -439,14 +571,21 @@ async function saveEmotionUpdateToInbox(payload: any) {
 async function fetchBlobEnvelope(payload: any): Promise<any | null> {
   const url = payload?.url;
   if (typeof url !== 'string' || !url) return null;
+  traceSw('blob-fetch-start', payload);
   try {
     const res = await fetch(url);
     if (!res.ok) {
+      traceSw('blob-fetch-http-failed', payload, { status: res.status });
       console.warn('[amsg] blob fetch returned', res.status, url);
       return null;
     }
-    return await res.json();
+    const real = await res.json();
+    traceSw('blob-fetch-ok', real);
+    return real;
   } catch (e) {
+    traceSw('blob-fetch-error', payload, {
+      error: e instanceof Error ? e.message : String(e),
+    });
     console.warn('[amsg] blob fetch failed', url, e);
     return null;
   }
@@ -465,6 +604,7 @@ async function saveIncomingActiveMessage(payload: any) {
 
   // 2. 按 messageKind 分轨; 兜底: 老 worker (0.6.x) 推过来的没 messageKind 字段, 当 content 处理.
   const messageKind: string = payload?.messageKind ?? 'content';
+  traceSw('route-payload', payload, { route: messageKind });
 
   switch (messageKind) {
     case 'content':

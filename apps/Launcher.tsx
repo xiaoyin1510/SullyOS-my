@@ -1,6 +1,7 @@
 import React, { useMemo, useEffect, useLayoutEffect, useState, useRef } from 'react';
 import { useOS } from '../context/OSContext';
 import { INSTALLED_APPS, DOCK_APPS } from '../constants';
+import { isDevDebugAvailable, subscribeDevDebugAvailability } from '../utils/devDebug';
 import AppIcon from '../components/os/AppIcon';
 import { DB } from '../utils/db';
 import { CharacterProfile, Anniversary, AppID, DailySchedule } from '../types';
@@ -257,6 +258,23 @@ const WidgetsPage = React.memo(({ contentColor, openApp, anniversaries, characte
     const calendarDays = Array.from({ length: totalDays }, (_, i) => i + 1);
     const paddingDays = Array.from({ length: startOffset }, () => null);
 
+    // --- Upcoming events: only today + future, soonest first (non-mutating), paginated ---
+    const todayStr = `${currentYear}-${String(currentMonth + 1).padStart(2, '0')}-${String(now.getDate()).padStart(2, '0')}`;
+    const upcomingEvents = useMemo(
+        () => [...(anniversaries as any[])]
+            .filter((a: any) => a.date >= todayStr)
+            .sort((a: any, b: any) => a.date.localeCompare(b.date)),
+        [anniversaries, todayStr]
+    );
+    const EVENTS_PER_PAGE = 4;
+    const eventPageCount = Math.max(1, Math.ceil(upcomingEvents.length / EVENTS_PER_PAGE));
+    const [eventPage, setEventPage] = useState(0);
+    // Clamp the page if the list shrinks (e.g. an event passes / is removed)
+    useEffect(() => {
+        if (eventPage > eventPageCount - 1) setEventPage(eventPageCount - 1);
+    }, [eventPageCount, eventPage]);
+    const pagedEvents = upcomingEvents.slice(eventPage * EVENTS_PER_PAGE, eventPage * EVENTS_PER_PAGE + EVENTS_PER_PAGE);
+
     return (
         <div className="w-full flex-shrink-0 snap-center snap-always flex flex-col px-6 pt-24 pb-8 space-y-6 h-full overflow-y-auto no-scrollbar">
               <div className="bg-white/25 rounded-3xl p-6 border border-white/25 shadow-xl">
@@ -293,20 +311,43 @@ const WidgetsPage = React.memo(({ contentColor, openApp, anniversaries, characte
                   </div>
               </div>
 
-              <div className="bg-white/25 rounded-3xl p-5 border border-white/25 shadow-xl flex-1 min-h-[200px]">
-                  <h3 className="text-xs font-bold opacity-60 uppercase tracking-widest mb-4 flex items-center gap-2" style={{ color: contentColor }}>
-                      <span className="w-2 h-2 bg-purple-400 rounded-full"></span> Upcoming Events
-                  </h3>
+              <div className="bg-white/25 rounded-3xl p-5 border border-white/25 shadow-xl flex flex-col flex-1 min-h-[200px]">
+                  <div className="flex items-center justify-between mb-4">
+                      <h3 className="text-xs font-bold opacity-60 uppercase tracking-widest flex items-center gap-2" style={{ color: contentColor }}>
+                          <span className="w-2 h-2 bg-purple-400 rounded-full"></span> Upcoming Events
+                      </h3>
+                      {eventPageCount > 1 && (
+                          <div className="flex items-center gap-2 shrink-0" style={{ color: contentColor }}>
+                              <button
+                                  onClick={(e) => { e.stopPropagation(); setEventPage(p => Math.max(0, p - 1)); }}
+                                  disabled={eventPage === 0}
+                                  className="w-6 h-6 rounded-full bg-white/15 flex items-center justify-center disabled:opacity-25 hover:bg-white/30 transition-colors active:scale-90"
+                                  aria-label="Previous events"
+                              >
+                                  <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" strokeWidth={2.5} stroke="currentColor" className="w-3 h-3"><path strokeLinecap="round" strokeLinejoin="round" d="M15.75 19.5L8.25 12l7.5-7.5" /></svg>
+                              </button>
+                              <span className="text-[10px] font-mono opacity-60 tabular-nums">{eventPage + 1}/{eventPageCount}</span>
+                              <button
+                                  onClick={(e) => { e.stopPropagation(); setEventPage(p => Math.min(eventPageCount - 1, p + 1)); }}
+                                  disabled={eventPage >= eventPageCount - 1}
+                                  className="w-6 h-6 rounded-full bg-white/15 flex items-center justify-center disabled:opacity-25 hover:bg-white/30 transition-colors active:scale-90"
+                                  aria-label="Next events"
+                              >
+                                  <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" strokeWidth={2.5} stroke="currentColor" className="w-3 h-3"><path strokeLinecap="round" strokeLinejoin="round" d="M8.25 4.5l7.5 7.5-7.5 7.5" /></svg>
+                              </button>
+                          </div>
+                      )}
+                  </div>
                   <div className="space-y-3">
-                      {anniversaries.length > 0 ? anniversaries.sort((a: any, b: any) => a.date.localeCompare(b.date)).slice(0, 5).map((anni: any) => (
+                      {upcomingEvents.length > 0 ? pagedEvents.map((anni: any) => (
                           <div key={anni.id} className="flex items-center gap-3 p-3 bg-white/5 rounded-xl border border-white/10">
-                              <div className="w-10 h-10 bg-purple-500/20 rounded-lg flex flex-col items-center justify-center text-purple-200 border border-purple-500/30">
+                              <div className="w-10 h-10 shrink-0 bg-purple-500/20 rounded-lg flex flex-col items-center justify-center text-purple-200 border border-purple-500/30">
                                   <span className="text-[9px] opacity-70">{anni.date.split('-')[1]}</span>
                                   <span className="text-sm font-bold leading-none">{anni.date.split('-')[2]}</span>
                               </div>
-                              <div className="flex-1">
-                                  <div className="text-sm font-bold" style={{ color: contentColor }}>{anni.title}</div>
-                                  <div className="text-[10px] opacity-50" style={{ color: contentColor }}>{characters.find((c: any) => c.id === anni.charId)?.name || 'Unknown'}</div>
+                              <div className="flex-1 min-w-0">
+                                  <div className="text-sm font-bold truncate" style={{ color: contentColor }}>{anni.title}</div>
+                                  <div className="text-[10px] opacity-50 truncate" style={{ color: contentColor }}>{characters.find((c: any) => c.id === anni.charId)?.name || 'Unknown'}</div>
                               </div>
                           </div>
                       )) : (
@@ -344,10 +385,18 @@ const Launcher: React.FC = () => {
   const dragMoved = useRef(0);
 
   // Pagination Logic
-  const gridApps = useMemo(() => 
-    INSTALLED_APPS.filter(app => !DOCK_APPS.includes(app.id)), 
-    []
-  );
+  // 跟随 DevDebug 可用性：prod 用户在设置页连点 5 下解锁后，CharCreatorDev 立刻出现；
+  // 点「关闭」/ 刷新（prod 自动失效）也立刻消失。useMemo deps 没列 devDebugVisible
+  // 会让它锁在 mount 时的初值。
+  const [devDebugVisible, setDevDebugVisible] = useState(() => isDevDebugAvailable());
+  useEffect(() => subscribeDevDebugAvailability(setDevDebugVisible), []);
+  const gridApps = useMemo(() => {
+    return INSTALLED_APPS.filter(app =>
+      !DOCK_APPS.includes(app.id)
+      // 「捏脸·开发」仅在开发模式（右下角开发徽标可见或手动解锁时）显示
+      && (app.id !== AppID.CharCreatorDev || devDebugVisible)
+    );
+  }, [devDebugVisible]);
 
   const dockAppsConfig = useMemo(() => 
     DOCK_APPS.map(id => INSTALLED_APPS.find(app => app.id === id)).filter(Boolean) as typeof INSTALLED_APPS,
@@ -498,7 +547,7 @@ const Launcher: React.FC = () => {
   };
 
   const contentColor = theme.contentColor || '#ffffff';
-  const launcherBottomInset = 'max(env(safe-area-inset-bottom), 1.25rem)';
+  const launcherBottomInset = 'calc(var(--safe-bottom) + 1.25rem)';
   
   const totalUnread = Object.values(unreadMessages).reduce((a, b) => a + b, 0);
   const widgetUnread = widgetChar && unreadMessages[widgetChar.id] ? unreadMessages[widgetChar.id] : 0;

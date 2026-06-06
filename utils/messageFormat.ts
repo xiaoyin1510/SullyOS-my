@@ -110,6 +110,27 @@ export function normalizeMessageContent(
         return '[音乐卡片]';
     }
 
+    // TRPG 跑团片段：从 TRPG 游戏里多选转发到聊天的剧情。必须翻成完整可读文本，
+    // 让上下文 / 归档 / palace 都能读到"和用户一起玩游戏时发生了什么"，并标明来自 TRPG。
+    if (type === 'trpg_card') {
+        const t = msg.metadata?.trpg as {
+            gameTitle?: string;
+            userName?: string;
+            partyNames?: string[];
+            excerpt?: Array<{ speaker?: string; text?: string }>;
+        } | undefined;
+        if (t) {
+            const others = (t.partyNames || []).filter(n => n && n !== charName);
+            const withPart = others.length ? `（和${others.join('、')}）` : '';
+            const lines = (t.excerpt || [])
+                .map(e => `${e.speaker || ''}: ${(e.text || '').replace(/\s*\n+\s*/g, ' ').trim()}`)
+                .filter(s => s.trim() !== ':')
+                .join('\n');
+            return `[TRPG游戏片段] 这是${charName}和${t.userName || userName}${withPart}一起玩《${t.gameTitle || 'TRPG'}》跑团时的一段剧情（从游戏里转发到聊天，相当于你们一起玩游戏的共同回忆）：\n${lines}`;
+        }
+        return '[TRPG游戏片段]';
+    }
+
     // 默认：text / 未知类型 → 用 content
     return msg.content || '';
 }
@@ -152,5 +173,5 @@ export function isMessageSemanticallyRelevant(msg: Message): boolean {
     const type = msg.type as string;
     if (type === 'image' || type === 'emoji' || type === 'voice') return false;
     // 有内容或有结构化 metadata 才算
-    return !!(msg.content?.trim() || msg.metadata?.scoreCard || msg.metadata?.amount || msg.metadata?.song);
+    return !!(msg.content?.trim() || msg.metadata?.scoreCard || msg.metadata?.amount || msg.metadata?.song || msg.metadata?.trpg);
 }

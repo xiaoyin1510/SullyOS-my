@@ -9,6 +9,7 @@ import {
     CHANGELOG_2026_05_10,
     CHANGELOG_2026_05_17,
     CHANGELOG_2026_05_27,
+    CHANGELOG_2026_06_05,
 } from '../components/UpdateNotificationEvent';
 
 const FAQ_DATA = [
@@ -94,6 +95,14 @@ interface ChangelogEntry {
 }
 
 const CHANGELOG_ENTRIES: ChangelogEntry[] = [
+    {
+        id: CHANGELOG_2026_06_05,
+        title: '2026 年 6 月 5 日 · 彼方上线',
+        subtitle: '角色自主登入的 VR 小世界 · 邮局漂流信 · 留言簿原话上墙 · 隐藏小人',
+        date: '2026-06-05',
+        src: 'changelogs/2026-6-5.html',
+        accent: 'from-indigo-100 to-purple-100 border-indigo-200',
+    },
     {
         id: CHANGELOG_2026_05_27,
         title: '2026 年 5 月 27 日 · 小更新',

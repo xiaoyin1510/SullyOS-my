@@ -1,4 +1,4 @@
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, vi } from 'vitest';
 import { ActiveMsgStore } from './activeMsgStore';
 import type { InstantPushReasoningBufferEntry } from '../types';
 
@@ -111,6 +111,21 @@ describe('ActiveMsgStore reasoning chunking', () => {
 
   it('clearReasoning 空 sessionId 静默 no-op', async () => {
     await expect(ActiveMsgStore.clearReasoning('')).resolves.toBeUndefined();
+  });
+
+  it('连接复用: 单例建立后后续操作不再新开 indexedDB 连接', async () => {
+    // 先跑一次确保单例已建立 (前面的用例多半已经建立, 这里幂等)。
+    await ActiveMsgStore.getGlobalConfig();
+    const openSpy = vi.spyOn(indexedDB, 'open');
+    try {
+      await ActiveMsgStore.getGlobalConfig();
+      await ActiveMsgStore.listInboxMessages();
+      await ActiveMsgStore.consumeInboxMessages();
+      // 修复前: 3 个操作 = 3 次 open。修复后: 复用单例, 0 次。
+      expect(openSpy).not.toHaveBeenCalled();
+    } finally {
+      openSpy.mockRestore();
+    }
   });
 
   it('多 sessionId 互相隔离', async () => {

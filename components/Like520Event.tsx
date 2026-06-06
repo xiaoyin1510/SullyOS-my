@@ -89,7 +89,7 @@ type Phase =
     | 'user_creator' | 'uncovered_line' | 'ending_screen'
     | 'loading_b' | 'wake_up' | 'letter' | 'puzzle' | 'done' | 'error';
 
-interface ChibiResult {
+export interface ChibiResult {
     dataUrl: string;
     frameDataUrl: string;
     transparentDataUrl: string;
@@ -120,19 +120,69 @@ const sullyPresets = (): Record<string, string> => ({
 // iframe 捏脸 wrapper
 // ============================================================
 
-interface CreatorIframeProps {
+export interface CreatorIframeProps {
     mode: 'char' | 'user';
     charName?: string;
-    presets?: Record<string, string>;
+    presets?: Record<string, any>;
     isSully?: boolean;
+    /** 唯一草稿键（如彼方按 char.id），让草稿按角色隔离、与 520 互不串 */
+    draftKey?: string;
+    /** 覆盖标题（彼方用来去掉「变得小小的 520」文案） */
+    title?: string;
+    /** 覆盖英文副标题 */
+    subtitle?: string;
     onConfirm: (result: ChibiResult) => void;
 }
 
 const CHAR_CREATOR_URL = (((import.meta as any).env?.BASE_URL ?? '/') + 'like520/character_creator.html').replace(/\/+/g, '/');
 
-const CreatorIframe: React.FC<CreatorIframeProps> = ({ mode, charName, presets, isSully, onConfirm }) => {
+export const CreatorIframe: React.FC<CreatorIframeProps> = ({ mode, charName, presets, isSully, draftKey, title, subtitle, onConfirm }) => {
     const iframeRef = useRef<HTMLIFrameElement>(null);
+    // 自定义部件（开发模式上传）—— 异步从 DB 读出
+    const extraItemsRef = useRef<any[]>([]);
+    const readyRef = useRef(false);
+    const initSentRef = useRef(false);
 
+    // 最新参数 / 回调放 ref：让订阅与初始化的 effect 只跑一次，
+    // 避免父组件重渲导致反复重发 init（会触发 applyLike520Init 重置当前选择 → "弹回上一个"）
+    const paramsRef = useRef({ mode, charName, presets, isSully, draftKey, title, subtitle });
+    paramsRef.current = { mode, charName, presets, isSully, draftKey, title, subtitle };
+    const onConfirmRef = useRef(onConfirm);
+    onConfirmRef.current = onConfirm;
+
+    // init 只发一次（首次 ready）；之后绝不重发，保住用户的选择
+    const postInit = () => {
+        const w = iframeRef.current?.contentWindow;
+        if (!w) return;
+        const p = paramsRef.current;
+        w.postMessage({
+            type: 'like520_init',
+            payload: { ...p, isSully: !!p.isSully, extraItems: extraItemsRef.current },
+        }, '*');
+        initSentRef.current = true;
+    };
+    // 自定义部件单独走 add_items：只合并、不重置选择
+    const postAddItems = () => {
+        const w = iframeRef.current?.contentWindow;
+        if (!w || !extraItemsRef.current.length) return;
+        w.postMessage({ type: 'like520_add_items', payload: { extraItems: extraItemsRef.current } }, '*');
+    };
+
+    // 载入自定义部件（一次）；若已就绪则补发 add_items（合并而非重置）
+    useEffect(() => {
+        let cancelled = false;
+        (async () => {
+            try {
+                const parts = await DB.getCustomCreatorParts();
+                if (cancelled) return;
+                extraItemsRef.current = parts.map(p => ({ categoryKey: p.categoryKey, id: p.id, name: p.name, src: p.src, tintable: !!p.tintable }));
+                if (readyRef.current) postAddItems();
+            } catch { /* 没有自定义部件时静默 */ }
+        })();
+        return () => { cancelled = true; };
+    }, []);
+
+    // 消息订阅（一次）
     useEffect(() => {
         const handleMessage = (e: MessageEvent) => {
             if (!e.data || typeof e.data !== 'object') return;
@@ -140,24 +190,35 @@ const CreatorIframe: React.FC<CreatorIframeProps> = ({ mode, charName, presets, 
             if (e.source !== iframeWin) return;
 
             if (e.data.type === 'like520_ready') {
-                console.log(`[520][creator:${mode}] iframe ready, sending init (isSully=${!!isSully})`);
-                iframeWin?.postMessage({
-                    type: 'like520_init',
-                    payload: { mode, charName, presets, isSully: !!isSully },
-                }, '*');
+                readyRef.current = true;
+                if (!initSentRef.current) postInit();
             } else if (e.data.type === 'like520_result' && e.data.payload) {
-                console.log(`[520][creator:${mode}] result received`);
-                onConfirm({
+                onConfirmRef.current?.({
                     dataUrl: e.data.payload.dataUrl,
                     frameDataUrl: e.data.payload.frameDataUrl,
                     transparentDataUrl: e.data.payload.transparentDataUrl,
                     state: e.data.payload.state,
                 });
+            } else if (e.data.type === 'like520_save_custom_part' && e.data.payload?.part) {
+                // 捏人器界面内上传的自定义部件 → 落库（IndexedDB），刷新/换 app 都还在
+                const p = e.data.payload.part;
+                const part = {
+                    id: p.id, categoryKey: p.categoryKey, name: p.name,
+                    src: p.src, tintable: !!p.tintable, createdAt: Date.now(),
+                };
+                DB.saveCustomCreatorPart(part)
+                    .then(() => { extraItemsRef.current = [...extraItemsRef.current, { categoryKey: part.categoryKey, id: part.id, name: part.name, src: part.src, tintable: part.tintable }]; })
+                    .catch(() => { /* 落库失败：内存里仍可用，仅本次会话有效 */ });
+            } else if (e.data.type === 'like520_delete_custom_part' && e.data.payload?.id) {
+                const id = e.data.payload.id;
+                DB.deleteCustomCreatorPart(id)
+                    .then(() => { extraItemsRef.current = extraItemsRef.current.filter(x => x.id !== id); })
+                    .catch(() => {});
             }
         };
         window.addEventListener('message', handleMessage);
         return () => window.removeEventListener('message', handleMessage);
-    }, [mode, charName, presets, isSully, onConfirm]);
+    }, []);
 
     return (
         <iframe

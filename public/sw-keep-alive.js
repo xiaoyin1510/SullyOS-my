@@ -40,7 +40,7 @@ function concatBytes(...chunks) {
   return out;
 }
 
-// node_modules/.pnpm/@rei-standard+amsg-sw@2.2.0/node_modules/@rei-standard/amsg-sw/dist/index.mjs
+// node_modules/.pnpm/@rei-standard+amsg-sw@2.3.0/node_modules/@rei-standard/amsg-sw/dist/index.mjs
 var REI_SW_DB_NAME = "rei-sw";
 var REI_SW_DB_STORE = "request-outbox";
 var REI_SW_MULTIPART_STORE = "multipart-pending";
@@ -147,15 +147,25 @@ async function handlePushPayload(sw2, payload, ctx) {
     const duplicateNotification = await maybeShowDuplicateNotification(sw2, payload, claim, ctx);
     claim.duplicateNotification = duplicateNotification;
     await notifyDuplicate(payload, claim, ctx);
-    return { ...claim, duplicateNotification };
+    const result = { ...claim, duplicateNotification };
+    const businessError2 = await readDuplicateBusinessError(claim, ctx);
+    if (businessError2 !== void 0) {
+      result.businessError = businessError2;
+    }
+    return result;
   }
-  await dispatchBusinessPayload(sw2, payload, {
+  const dispatchResult = await dispatchBusinessPayload(sw2, payload, {
     defaultIcon: ctx.defaultIcon,
     defaultBadge: ctx.defaultBadge,
     onBusinessPayload: ctx.onBusinessPayload
   }, async (intermediateResult) => {
     await updateDedupeNotificationState(claim, ctx, intermediateResult);
   });
+  const businessError = dispatchResult ? dispatchResult.businessError : void 0;
+  if (businessError !== void 0) {
+    claim.businessError = businessError;
+    await updateDedupeBusinessState(claim, ctx, businessError);
+  }
   return claim;
 }
 async function handleDeliverMessage(sw2, event, message, ctx) {
@@ -166,12 +176,16 @@ async function handleDeliverMessage(sw2, event, message, ctx) {
     }
     const source = typeof message.source === "string" && message.source ? message.source : "message";
     result = await handlePushPayload(sw2, message.payload, { ...ctx, source }) || {};
-    respondToSender(event, {
+    const ack = {
       ok: true,
       duplicate: Boolean(result.duplicate),
       key: result.key,
       requestId: message.requestId
-    });
+    };
+    if (result.businessError !== void 0) {
+      ack.businessError = result.businessError;
+    }
+    respondToSender(event, ack);
   } catch (error) {
     respondToSender(event, {
       ok: false,
@@ -207,15 +221,22 @@ async function dispatchBusinessPayload(sw2, payload, defaults, onNotificationSet
     }
   }
   let businessWork = null;
+  let businessError;
   if (typeof defaults.onBusinessPayload === "function") {
     try {
       const result = defaults.onBusinessPayload(payload);
       if (result && typeof result.then === "function") {
-        businessWork = Promise.resolve(result).catch((error) => {
-          console.error("[rei-standard-amsg-sw] onBusinessPayload promise rejected:", error);
-        });
+        businessWork = Promise.resolve(result).then(
+          () => {
+          },
+          (error) => {
+            businessError = errorToMessage(error);
+            console.error("[rei-standard-amsg-sw] onBusinessPayload promise rejected:", error);
+          }
+        );
       }
     } catch (error) {
+      businessError = errorToMessage(error);
       console.error("[rei-standard-amsg-sw] onBusinessPayload error:", error);
     }
   }
@@ -225,6 +246,7 @@ async function dispatchBusinessPayload(sw2, payload, defaults, onNotificationSet
     await onNotificationSettled(settledResult);
   }
   if (businessWork) await businessWork;
+  settledResult.businessError = businessError;
   return settledResult;
 }
 function resolveEventName(payload) {
@@ -414,6 +436,33 @@ async function updateDedupeNotificationState(claim, ctx, dispatchResult) {
     console.error("[rei-standard-amsg-sw] dedupe notification state update failed:", error);
   }
 }
+async function updateDedupeBusinessState(claim, ctx, businessError) {
+  if (businessError === void 0) return;
+  if (!claim || claim.duplicate || !claim.key || !ctx.dedupe || ctx.dedupe.enabled === false) return;
+  try {
+    const latest = await readDedupeRecord(ctx.dedupe, claim.key);
+    if (!latest || !claim.record || latest.firstSeenAt !== claim.record.firstSeenAt) return;
+    const next = { ...latest, key: claim.key, businessError };
+    await putDedupeRecord(ctx.dedupe, next);
+    claim.record = next;
+  } catch (error) {
+    console.error("[rei-standard-amsg-sw] dedupe business state update failed:", error);
+  }
+}
+async function readDuplicateBusinessError(claim, ctx) {
+  const snapshot = claim && claim.existing ? claim.existing.businessError : void 0;
+  if (!ctx.dedupe || ctx.dedupe.enabled === false || !claim || !claim.key || !claim.existing) {
+    return snapshot;
+  }
+  try {
+    const latest = await readDedupeRecord(ctx.dedupe, claim.key);
+    if (latest && latest.firstSeenAt === claim.existing.firstSeenAt && latest.businessError !== void 0) {
+      return latest.businessError;
+    }
+  } catch (_readError) {
+  }
+  return snapshot;
+}
 async function maybeShowDuplicateNotification(sw2, payload, claim, ctx) {
   const existing = claim && claim.existing ? claim.existing : null;
   if (!existing || existing.notificationShown === true) {
@@ -441,8 +490,10 @@ async function maybeShowDuplicateNotification(sw2, payload, claim, ctx) {
     return { shown: false, reason: "no-notification" };
   }
   await sw2.registration.showNotification(notification.title, notification.options);
+  const latest = await readDedupeRecord(ctx.dedupe, claim.key);
+  const base = latest || existing;
   const next = {
-    ...existing,
+    ...base,
     notificationShown: true,
     notificationStatePending: false
   };
@@ -840,6 +891,9 @@ async function registerFlushSync(sw2) {
     console.error("RESTORE ERROR", _error);
   }
 }
+function errorToMessage(error) {
+  return error instanceof Error ? error.message : String(error);
+}
 function respondToSender(event, message) {
   const messagePort = event.ports && event.ports[0];
   if (messagePort && typeof messagePort.postMessage === "function") {
@@ -1013,23 +1067,87 @@ async function deleteStoreRecord(storeName, id) {
     request.onerror = () => reject(request.error || new Error(`Failed to delete ${storeName}`));
   });
 }
-async function withDatabaseStore(storeName, mode, handler) {
-  const db = await openQueueDatabase();
-  return new Promise((resolve, reject) => {
-    const transaction = db.transaction(storeName, mode);
+function isConnectionClosingError(error) {
+  if (!error) return false;
+  if (error.name === "InvalidStateError") return true;
+  const message = String(error.message || error);
+  return /connection is closing|database connection is closing/i.test(message);
+}
+function invalidateDedupeCache(dedupe, db) {
+  const cacheKey = `${dedupe.dbName}:${dedupe.storeName}`;
+  const cached = dedupeDbCache.get(cacheKey);
+  if (cached && cached === db) {
+    try {
+      cached.close();
+    } catch (_closeError) {
+    }
+    dedupeDbCache.delete(cacheKey);
+  }
+}
+function invalidateQueueCache(db) {
+  if (cachedDB && cachedDB === db) {
+    try {
+      cachedDB.close();
+    } catch (_closeError) {
+    }
+    cachedDB = null;
+  }
+}
+async function withConnectionRetry(open, invalidate, run) {
+  for (let attempt = 0; attempt < 2; attempt++) {
+    let db;
+    try {
+      db = await open();
+    } catch (error) {
+      if (attempt === 0) {
+        invalidate(void 0);
+        continue;
+      }
+      throw error;
+    }
+    try {
+      return await run(db);
+    } catch (error) {
+      if (attempt === 0 && isConnectionClosingError(error)) {
+        invalidate(db);
+        continue;
+      }
+      throw error;
+    }
+  }
+  throw new Error("[rei-standard-amsg-sw] store connection retry exhausted");
+}
+function withDatabaseStore(storeName, mode, handler) {
+  return withConnectionRetry(openQueueDatabase, invalidateQueueCache, (db) => new Promise((resolve, reject) => {
+    let transaction;
+    try {
+      transaction = db.transaction(storeName, mode);
+    } catch (error) {
+      reject(error);
+      return;
+    }
     const store = transaction.objectStore(storeName);
     transaction.onerror = () => reject(transaction.error || new Error("Database transaction failed"));
     Promise.resolve(handler(store, resolve, reject)).catch(reject);
-  });
+  }));
 }
-async function withDedupeStore(dedupe, mode, handler) {
-  const db = await openDedupeDatabase(dedupe);
-  return new Promise((resolve, reject) => {
-    const transaction = db.transaction(dedupe.storeName, mode);
-    const store = transaction.objectStore(dedupe.storeName);
-    transaction.onerror = () => reject(transaction.error || new Error("Dedupe transaction failed"));
-    Promise.resolve(handler(store, resolve, reject)).catch(reject);
-  });
+function withDedupeStore(dedupe, mode, handler) {
+  return withConnectionRetry(
+    () => openDedupeDatabase(dedupe),
+    (db) => invalidateDedupeCache(dedupe, db),
+    (db) => new Promise((resolve, reject) => {
+      let transaction;
+      try {
+        transaction = db.transaction(dedupe.storeName, mode);
+      } catch (error) {
+        reject(error);
+        return;
+      }
+      const store = transaction.objectStore(dedupe.storeName);
+      transaction.onerror = () => reject(transaction.error || new Error("Dedupe transaction failed"));
+      Promise.resolve(handler(store, resolve, reject)).catch(reject);
+    })
+  );
 }
 function hasIndexedDB() {
   return typeof indexedDB !== "undefined" && indexedDB && typeof indexedDB.open === "function";
@@ -1064,9 +1182,15 @@ function openDedupeDatabase(dedupe) {
     request.onsuccess = () => {
       const db = request.result;
       dedupeDbCache.set(cacheKey, db);
+      const drop = () => {
+        if (dedupeDbCache.get(cacheKey) === db) dedupeDbCache.delete(cacheKey);
+      };
       db.onversionchange = () => {
         db.close();
-        dedupeDbCache.delete(cacheKey);
+        drop();
+      };
+      db.onclose = () => {
+        drop();
       };
       resolve(db);
     };
@@ -1092,12 +1216,16 @@ function openQueueDatabase() {
       }
     };
     request.onsuccess = () => {
-      cachedDB = request.result;
-      cachedDB.onversionchange = () => {
-        cachedDB.close();
-        cachedDB = null;
+      const db = request.result;
+      cachedDB = db;
+      db.onversionchange = () => {
+        db.close();
+        if (cachedDB === db) cachedDB = null;
       };
-      resolve(cachedDB);
+      db.onclose = () => {
+        if (cachedDB === db) cachedDB = null;
+      };
+      resolve(db);
     };
     request.onerror = () => reject(request.error || new Error("Failed to open queue database"));
   });
@@ -1106,15 +1234,20 @@ function createObjectStoreIfMissing(db, tx, name, options) {
   if (db.objectStoreNames.contains(name)) return tx.objectStore(name);
   return db.createObjectStore(name, options);
 }
-async function withQueueStore(mode, handler) {
-  const db = await openQueueDatabase();
-  return new Promise((resolve, reject) => {
-    const transaction = db.transaction(REI_SW_DB_STORE, mode);
+function withQueueStore(mode, handler) {
+  return withConnectionRetry(openQueueDatabase, invalidateQueueCache, (db) => new Promise((resolve, reject) => {
+    let transaction;
+    try {
+      transaction = db.transaction(REI_SW_DB_STORE, mode);
+    } catch (error) {
+      reject(error);
+      return;
+    }
     const store = transaction.objectStore(REI_SW_DB_STORE);
     transaction.oncomplete = () => resolve(void 0);
     transaction.onerror = () => reject(transaction.error || new Error("Queue transaction failed"));
     Promise.resolve(handler(store, resolve, reject)).catch(reject);
-  });
+  }));
 }
 async function addQueuedRequest(request) {
   return withQueueStore("readwrite", (store, resolve, reject) => {
@@ -1143,7 +1276,7 @@ async function removeQueuedRequest(id) {
 }
 
 // worker/sw-keep-alive.ts
-var SW_VERSION = "1.14.0";
+var SW_VERSION = "1.15.1";
 var PING_INTERVAL = 15e3;
 var MAX_MANUAL_ALIVE_MS = 5 * 6e4;
 var ACTIVE_MSG_DB_NAME = "ActiveMsg";
@@ -1158,12 +1291,44 @@ var manualKeepAliveStartedAt = 0;
 var proactiveSchedules = /* @__PURE__ */ new Map();
 var proactiveTimers = /* @__PURE__ */ new Map();
 var sw = self;
+function summarizeAmsgPayload(payload) {
+  return {
+    messageKind: payload?.messageKind ?? "content",
+    messageType: payload?.messageType,
+    messageId: payload?.messageId,
+    sessionId: payload?.sessionId,
+    charId: payload?.metadata?.charId,
+    chunk: payload?.messageIndex,
+    total: payload?.totalMessages,
+    hasBlob: payload?._blob === true
+  };
+}
+function traceSw(event, payload, extra = {}) {
+  try {
+    console.log("[InstantTrace:SW]", {
+      ts: (/* @__PURE__ */ new Date()).toISOString(),
+      event,
+      ...payload !== void 0 ? summarizeAmsgPayload(payload) : {},
+      ...extra
+    });
+  } catch {
+  }
+}
 installReiSW(sw, {
   defaultIcon: "./icons/icon-192.png",
   defaultBadge: "./icons/icon-192.png",
   multipart: { enabled: true },
   onBusinessPayload: async (payload) => {
-    await saveIncomingActiveMessage(payload);
+    traceSw("business-payload-start", payload);
+    try {
+      await saveIncomingActiveMessage(payload);
+      traceSw("business-payload-done", payload);
+    } catch (e) {
+      traceSw("business-payload-error", payload, {
+        error: e instanceof Error ? e.message : String(e)
+      });
+      throw e;
+    }
   }
 });
 function hasActiveProactiveSchedules() {
@@ -1208,6 +1373,12 @@ function stopKeepAlive() {
 }
 async function notifyClients(data) {
   const clients = await sw.clients.matchAll({ type: "window", includeUncontrolled: true });
+  traceSw("notify-clients", void 0, {
+    type: data.type,
+    charId: data.charId,
+    sessionId: data.sessionId,
+    count: clients.length
+  });
   for (const client of clients) {
     client.postMessage(data);
   }
@@ -1244,14 +1415,40 @@ function syncProactive(configs) {
   }
   refreshKeepAlive();
 }
+var inboxDbPromise = null;
 function openInboxDb() {
-  return new Promise((resolve, reject) => {
+  if (inboxDbPromise) return inboxDbPromise;
+  const promise = new Promise((resolve, reject) => {
     const request = indexedDB.open(ACTIVE_MSG_DB_NAME, ACTIVE_MSG_DB_VERSION);
-    request.onerror = () => reject(request.error);
+    let settled = false;
+    request.onerror = () => {
+      if (inboxDbPromise === promise) inboxDbPromise = null;
+      settled = true;
+      reject(request.error);
+    };
     request.onblocked = () => {
+      if (inboxDbPromise === promise) inboxDbPromise = null;
+      settled = true;
       reject(new Error("IndexedDB open blocked (older version still open elsewhere)"));
     };
-    request.onsuccess = () => resolve(request.result);
+    request.onsuccess = () => {
+      const db = request.result;
+      if (settled) {
+        try {
+          db.close();
+        } catch {
+        }
+        return;
+      }
+      db.onversionchange = () => {
+        db.close();
+        if (inboxDbPromise === promise) inboxDbPromise = null;
+      };
+      db.onclose = () => {
+        if (inboxDbPromise === promise) inboxDbPromise = null;
+      };
+      resolve(db);
+    };
     request.onupgradeneeded = () => {
       const db = request.result;
       if (!db.objectStoreNames.contains(ACTIVE_MSG_INBOX_STORE)) {
@@ -1268,6 +1465,39 @@ function openInboxDb() {
       }
     };
   });
+  inboxDbPromise = promise;
+  return promise;
+}
+function isInboxConnectionClosingError(error) {
+  if (!error || typeof error !== "object") return false;
+  const e = error;
+  return e.name === "InvalidStateError" || /connection is closing/i.test(String(e.message || ""));
+}
+async function withInboxTx(storeName, mode, run) {
+  for (let attempt = 0; attempt < 2; attempt++) {
+    const db = await openInboxDb();
+    try {
+      return await new Promise((resolve, reject) => {
+        let tx;
+        try {
+          tx = db.transaction(storeName, mode);
+        } catch (e) {
+          reject(e);
+          return;
+        }
+        tx.oncomplete = () => resolve();
+        tx.onerror = () => reject(tx.error || new Error(`inbox tx error (${storeName})`));
+        tx.onabort = () => reject(tx.error || new Error(`inbox tx aborted (${storeName})`));
+        run(tx.objectStore(storeName));
+      });
+    } catch (e) {
+      if (attempt === 0 && isInboxConnectionClosingError(e)) {
+        inboxDbPromise = null;
+        continue;
+      }
+      throw e;
+    }
+  }
 }
 async function saveContentToInbox(payload) {
   const charId = payload?.metadata?.charId;
@@ -1279,11 +1509,12 @@ async function saveContentToInbox(payload) {
   const payloadTimestamp = payload?.timestamp;
   const parsedSentAt = payloadTimestamp ? new Date(payloadTimestamp).getTime() : NaN;
   const sentAt = Number.isFinite(parsedSentAt) ? parsedSentAt : Date.now();
-  if (!charId) return;
-  const db = await openInboxDb();
-  await new Promise((resolve, reject) => {
-    const tx = db.transaction(ACTIVE_MSG_INBOX_STORE, "readwrite");
-    tx.objectStore(ACTIVE_MSG_INBOX_STORE).put({
+  if (!charId) {
+    traceSw("content-drop-no-char", payload);
+    return;
+  }
+  await withInboxTx(ACTIVE_MSG_INBOX_STORE, "readwrite", (store) => {
+    store.put({
       messageId,
       charId,
       charName,
@@ -1305,9 +1536,8 @@ async function saveContentToInbox(payload) {
       sentAt,
       receivedAt: Date.now()
     });
-    tx.oncomplete = () => resolve();
-    tx.onerror = () => reject(tx.error);
   });
+  traceSw("inbox-content-saved", payload, { bodyChars: body.length });
   await notifyClients({
     type: "active-msg-received",
     charId,
@@ -1321,32 +1551,29 @@ async function saveReasoningToBuffer(payload) {
   const sessionId = payload?.sessionId;
   const charId = payload?.metadata?.charId;
   const reasoningContent = String(payload?.reasoningContent ?? "");
-  if (!sessionId || !charId || !reasoningContent) return;
-  const db = await openInboxDb();
-  await new Promise((resolve, reject) => {
-    const tx = db.transaction(ACTIVE_MSG_REASONING_BUFFER_STORE, "readwrite");
-    const store = tx.objectStore(ACTIVE_MSG_REASONING_BUFFER_STORE);
+  if (!sessionId || !charId || !reasoningContent) {
+    traceSw("reasoning-drop-incomplete", payload, {
+      hasSessionId: !!sessionId,
+      hasCharId: !!charId,
+      chars: reasoningContent.length
+    });
+    return;
+  }
+  await withInboxTx(ACTIVE_MSG_REASONING_BUFFER_STORE, "readwrite", (store) => {
     store.put({
       sessionId,
       charId,
       reasoningContent,
       receivedAt: Date.now()
     });
-    tx.oncomplete = () => resolve();
-    tx.onerror = () => reject(tx.error);
-    tx.onabort = () => reject(tx.error || new Error("reasoning buffer write aborted"));
   });
+  traceSw("reasoning-buffer-saved", payload, { chars: reasoningContent.length });
   await notifyClients({ type: "active-msg-reasoning", sessionId, charId });
 }
 async function clearReasoningBuffer(sessionId) {
   if (!sessionId) return;
-  const db = await openInboxDb();
-  await new Promise((resolve, reject) => {
-    const tx = db.transaction(ACTIVE_MSG_REASONING_BUFFER_STORE, "readwrite");
-    tx.objectStore(ACTIVE_MSG_REASONING_BUFFER_STORE).delete(sessionId);
-    tx.oncomplete = () => resolve();
-    tx.onerror = () => reject(tx.error);
-    tx.onabort = () => reject(tx.error || new Error("reasoning buffer clear aborted"));
+  await withInboxTx(ACTIVE_MSG_REASONING_BUFFER_STORE, "readwrite", (store) => {
+    store.delete(sessionId);
   });
 }
 async function savePendingToolCall(payload) {
@@ -1358,10 +1585,8 @@ async function savePendingToolCall(payload) {
     console.warn("[amsg] clearReasoningBuffer before tool_request failed", e);
   });
   const iteration = Number.isFinite(payload?.metadata?.iteration) ? Number(payload.metadata.iteration) : 0;
-  const db = await openInboxDb();
-  await new Promise((resolve, reject) => {
-    const tx = db.transaction(ACTIVE_MSG_PENDING_TOOL_CALLS_STORE, "readwrite");
-    tx.objectStore(ACTIVE_MSG_PENDING_TOOL_CALLS_STORE).put({
+  await withInboxTx(ACTIVE_MSG_PENDING_TOOL_CALLS_STORE, "readwrite", (store) => {
+    store.put({
       sessionId,
       charId,
       toolCalls,
@@ -1369,8 +1594,6 @@ async function savePendingToolCall(payload) {
       iteration,
       createdAt: Date.now()
     });
-    tx.oncomplete = () => resolve();
-    tx.onerror = () => reject(tx.error);
   });
 }
 async function notifyVisibleClientForToolRequest(payload) {
@@ -1401,12 +1624,13 @@ async function notifyVisibleClientForToolRequest(payload) {
 async function saveEmotionUpdateToInbox(payload) {
   const charId = payload?.metadata?.charId;
   const emotionRaw = payload?.metadata?.emotionRaw || "";
-  if (!charId) return;
+  if (!charId) {
+    traceSw("emotion-drop-no-char", payload);
+    return;
+  }
   const messageId = String(payload?.messageId || `${charId}-emotion-${Date.now()}`);
-  const db = await openInboxDb();
-  await new Promise((resolve, reject) => {
-    const tx = db.transaction(ACTIVE_MSG_INBOX_STORE, "readwrite");
-    tx.objectStore(ACTIVE_MSG_INBOX_STORE).put({
+  await withInboxTx(ACTIVE_MSG_INBOX_STORE, "readwrite", (store) => {
+    store.put({
       messageId,
       charId,
       charName: payload?.contactName || "",
@@ -1416,22 +1640,28 @@ async function saveEmotionUpdateToInbox(payload) {
       sentAt: Date.now(),
       receivedAt: Date.now()
     });
-    tx.oncomplete = () => resolve();
-    tx.onerror = () => reject(tx.error);
   });
+  traceSw("inbox-emotion-saved", payload, { emotionChars: String(emotionRaw).length });
   await notifyClients({ type: "active-msg-received", charId, charName: payload?.contactName || "", body: "", emotionUpdate: true });
 }
 async function fetchBlobEnvelope(payload) {
   const url = payload?.url;
   if (typeof url !== "string" || !url) return null;
+  traceSw("blob-fetch-start", payload);
   try {
     const res = await fetch(url);
     if (!res.ok) {
+      traceSw("blob-fetch-http-failed", payload, { status: res.status });
       console.warn("[amsg] blob fetch returned", res.status, url);
       return null;
     }
-    return await res.json();
+    const real = await res.json();
+    traceSw("blob-fetch-ok", real);
+    return real;
   } catch (e) {
+    traceSw("blob-fetch-error", payload, {
+      error: e instanceof Error ? e.message : String(e)
+    });
     console.warn("[amsg] blob fetch failed", url, e);
     return null;
   }
@@ -1443,6 +1673,7 @@ async function saveIncomingActiveMessage(payload) {
     return saveIncomingActiveMessage(real);
   }
   const messageKind = payload?.messageKind ?? "content";
+  traceSw("route-payload", payload, { route: messageKind });
   switch (messageKind) {
     case "content":
       await saveContentToInbox(payload);

@@ -1517,6 +1517,13 @@ const Chat: React.FC = () => {
                 }
             }
 
+            // 隐藏线追平到向量高水位：覆盖「关闭期推进了 hwm 但 hide 被冻结」的历史空档。
+            // 只要全自动记忆开着，即便本轮没有新批次也把 hide 追平到 hwm（之前的消息都已向量化）。
+            if ((char as any).autoArchiveEnabled) {
+                const hwmFinal = getMemoryPalaceHighWaterMark(char.id);
+                if (hwmFinal > (latestHideBefore || 0)) latestHideBefore = hwmFinal;
+            }
+
             // 循环结束后把累积的自动归档一次性写回角色
             if (latestHideBefore !== char.hideBeforeMessageId || accumulatedMemories.length !== (char.memories?.length || 0)) {
                 updateCharacter(char.id, {
@@ -2201,6 +2208,8 @@ const Chat: React.FC = () => {
                 onSetTranslateLang={(lang: string) => { setTranslateTargetLang(lang); localStorage.setItem(`chat_translate_lang_${activeCharacterId}`, lang); setShowingTargetIds(new Set()); }}
                 xhsEnabled={!!char.xhsEnabled}
                 onToggleXhs={() => updateCharacter(char.id, { xhsEnabled: !char.xhsEnabled })}
+                timeAwarenessEnabled={char.timeAwarenessEnabled !== false}
+                onToggleTimeAwareness={() => updateCharacter(char.id, { timeAwarenessEnabled: char.timeAwarenessEnabled === false })}
                 htmlModeEnabled={!!(char as any).htmlModeEnabled}
                 onToggleHtmlMode={() => updateCharacter(char.id, { htmlModeEnabled: !((char as any).htmlModeEnabled) } as any)}
                 htmlModeCustomPrompt={settingsHtmlModeCustomPrompt}

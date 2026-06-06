@@ -1,0 +1,37 @@
+name = "sullyos-post-office"
+main = "src/index.ts"
+compatibility_date = "2026-01-01"
+
+# 彼方虚拟邮局 —— 跨用户漂流信的共享后端。
+#
+# 这是一个【所有用户共用】的后端：客户端默认指向你部署的这一个实例
+# （如 https://noir2.cc.cd/po），其他用户无需任何配置即可互相通信。
+#
+# 部署：
+#   1) wrangler d1 create sullyos-post-office       # 拿到 database_id
+#   2) 把 database_id 填到下面 [[d1_databases]]
+#   3) wrangler deploy
+#   （表结构 Worker 会自动建，加性、不破坏老数据；不必手动跑 schema.sql）
+#
+# Secrets（用 `wrangler secret put <名字>` 设置，别写进本文件）：
+#   ADMIN_TOKEN   管理员令牌；未配置则 /admin/* 一律 503 关闭
+#   PO_IP_SALT    限流哈希盐；用于不可逆化 IP，建议配置
+#
+# 路由到 noir2.cc.cd/po/*（二选一）：
+#   A. 单独部署本 worker，然后在 Cloudflare 给 noir2.cc.cd/po/* 加一条 Route 指向它；
+#   B. 或把 src/index.ts 的 fetch 逻辑并进你现有的 noir2 worker（按 path 结尾匹配，
+#      与现有 push 路由不冲突）。
+
+[[d1_databases]]
+binding = "DB"
+database_name = "sullyos-post-office"
+database_id = "REPLACE_WITH_YOUR_D1_ID"
+
+# 可选环境变量（非密钥，可放这里）：
+[vars]
+PO_MAX_REPLIES = "3"      # 一封信最多被几个设备回信
+PO_DISLIKE_LIMIT = "5"    # 点踩(=举报)数达此值即自动删信
+# 正文上限固定 400 字（按字符，1 汉字/标点=1 字），见 src/index.ts MAX_CONTENT
+# PO_RATE_LETTERS = "5"   # 每 IP 每 5 小时投信上限（窗口固定 5 小时）
+# PO_RATE_REPLIES = "60"  # 每 IP 每分钟回信上限
+# PO_RATE_VOTES   = "120" # 每 IP 每分钟投票上限

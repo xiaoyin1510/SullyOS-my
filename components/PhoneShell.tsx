@@ -38,6 +38,8 @@ import MemoryPalaceApp from '../apps/MemoryPalaceApp';
 import HandbookApp from '../apps/HandbookApp';
 import QQBridge from '../apps/QQBridge';
 import HotNewsApp from '../apps/HotNewsApp';
+import VRWorldApp from '../apps/VRWorldApp';
+import CharCreatorDevApp from '../apps/CharCreatorDevApp';
 import { SpecialMomentsApp } from './ValentineEvent';
 import { Like520Controller, shouldShowLike520Popup } from './Like520Event';
 import { UpdateNotificationController, shouldShowUpdateNotification } from './UpdateNotificationEvent';
@@ -564,10 +566,17 @@ const PhoneShell: React.FC = () => {
       case AppID.QQBridge: return <QQBridge />;
       case AppID.HotNews: return <HotNewsApp />;
       case AppID.SpecialMoments: return <SpecialMomentsApp />;
+      case AppID.VRWorld: return <VRWorldApp />;
+      case AppID.CharCreatorDev: return <CharCreatorDevApp />;
       case AppID.Launcher:
       default: return <Launcher />;
     }
   };
+
+  // 安全区策略（方案 B）：彼方/聊天/群聊/桌面这几个 App 已全屏铺底、自己给控件让位，外壳不再加 padding；
+  // 其余尚未迁移、靠外壳兜底的 App，仍由外壳用单一来源变量 --safe-* 统一让出安全区，避免顶栏怼进状态栏。
+  // TODO(safe-area-A): 把下列「未迁移」App 逐个改为自理安全区后，移除外壳这层兜底，实现全屏无色条。
+  const shellHandlesSafeArea = ![AppID.Launcher, AppID.VRWorld, AppID.Chat, AppID.GroupChat].includes(activeApp);
 
   return (
     <div className="relative w-full h-full overflow-hidden bg-gradient-to-br from-pink-200 via-purple-200 to-indigo-200 text-slate-900 font-sans select-none overscroll-none">
@@ -586,25 +595,18 @@ const PhoneShell: React.FC = () => {
        
        <div className={`absolute inset-0 transition-all duration-500 ${activeApp === AppID.Launcher ? 'bg-transparent' : 'bg-white/50 backdrop-blur-3xl'}`} />
        
-       {/* 
-          CRITICAL FIX: 
-          Using 'absolute inset-0' prevents layout collapse.
-          REMOVED 'flex flex-col' to fix layout issues in CheckPhone (gap) and SocialApp (jumping).
-          Now it acts as a pure container for full-screen apps.
-       */}
-      <div 
-  className="absolute inset-0 z-10 w-full h-full overflow-hidden bg-transparent overscroll-none flex flex-col"
-  style={{ 
-      paddingTop: activeApp !== AppID.Launcher ? 'env(safe-area-inset-top)' : 0,
-      paddingBottom: activeApp !== AppID.Launcher ? 'env(safe-area-inset-bottom)' : 0
-  }}
-> 
+       {/* 外壳安全区：自理安全区的 App 全屏铺底、自己让位，外壳不加 padding（否则双重留白或露出外壳底色成硬色条）；
+          未迁移 App 暂由外壳用单一来源变量 --safe-* 兜底，保证内容不被状态栏/home 条裁切。 */}
+      <div
+        className="absolute inset-0 z-10 w-full h-full overflow-hidden bg-transparent overscroll-none flex flex-col"
+        style={shellHandlesSafeArea ? { paddingTop: 'var(--safe-top)', paddingBottom: 'var(--safe-bottom)' } : undefined}
+      >
           {/* App Container */}
-         <div className="flex-1 relative overflow-hidden" style={{ contain: useIOSStandaloneLayout ? undefined : 'layout style paint' }}>
-    <AppErrorBoundary onCloseApp={closeApp} resetKey={`${activeApp}:${activeCharacterId || 'none'}`}>
-        {renderApp()}
-    </AppErrorBoundary>
-</div>
+          <div className="flex-1 relative overflow-hidden" style={{ contain: useIOSStandaloneLayout ? undefined : 'layout style paint' }}>
+            <AppErrorBoundary onCloseApp={closeApp} resetKey={`${activeApp}:${activeCharacterId || 'none'}`}>
+              {renderApp()}
+            </AppErrorBoundary>
+          </div>
 
           {/* Overlays: Status Bar (Top) */}
           {!theme.hideStatusBar && <StatusBar />}
