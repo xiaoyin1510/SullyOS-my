@@ -2,7 +2,7 @@
 import React, { useState, useEffect, useRef, useMemo } from 'react';
 import { useOS } from '../context/OSContext';
 import { DB } from '../utils/db';
-import { RoomItem, CharacterProfile, RoomTodo, RoomNote, DailySchedule } from '../types';
+import { RoomItem, CharacterProfile, RoomTodo, RoomNote, DailySchedule, AppID } from '../types';
 import ScheduleCard from '../components/schedule/ScheduleCard';
 import { ContextBuilder } from '../utils/context';
 import { injectMemoryPalace } from '../utils/memoryPalace/pipeline';
@@ -12,9 +12,29 @@ import { safeResponseJson } from '../utils/safeApi';
 import { Door, Sparkle, Image, GearSix, Camera } from '@phosphor-icons/react';
 import { FURNITURE_ICONS } from '../utils/furnitureIcons';
 import PixelHomeView from './pixelHome/PixelHomeView';
+import WorldHomeApp from './WorldHomeApp';
 
 const TWEMOJI_BASE = 'https://cdnjs.cloudflare.com/ajax/libs/twemoji/14.0.2/72x72';
 const twemojiUrl = (codepoint: string) => `${TWEMOJI_BASE}/${codepoint}.png`;
+
+/** 拜访小屋卡片的柔色底（按序循环，营造每个房间各有色调的奇幻感）。 */
+const ROOM_CARD_TINTS = [
+    'linear-gradient(180deg,rgba(120,92,170,.42),rgba(34,26,62,.6))',
+    'linear-gradient(180deg,rgba(70,80,135,.42),rgba(26,28,56,.62))',
+    'linear-gradient(180deg,rgba(150,132,192,.4),rgba(52,42,86,.6))',
+    'linear-gradient(180deg,rgba(110,150,200,.4),rgba(34,52,86,.6))',
+    'linear-gradient(180deg,rgba(132,96,176,.42),rgba(46,30,78,.6))',
+    'linear-gradient(180deg,rgba(70,64,92,.46),rgba(24,22,40,.64))',
+];
+/** 浅色（小小窝/家园分区）卡片柔色底——粉/薰衣草/浅蓝渐变。 */
+const ROOM_CARD_TINTS_LIGHT = [
+    'linear-gradient(180deg,rgba(250,212,228,.85),rgba(242,228,246,.8))',
+    'linear-gradient(180deg,rgba(232,228,248,.85),rgba(242,238,250,.8))',
+    'linear-gradient(180deg,rgba(226,216,246,.85),rgba(238,230,249,.8))',
+    'linear-gradient(180deg,rgba(212,230,247,.85),rgba(234,240,250,.8))',
+    'linear-gradient(180deg,rgba(226,212,245,.85),rgba(238,228,249,.8))',
+    'linear-gradient(180deg,rgba(234,231,242,.88),rgba(242,240,247,.82))',
+];
 
 // --- 1. 免版权贴纸素材库 (Sticker Library) ---
 // 使用手绘 SVG 图标替代 Twemoji，更精致的视觉体验
@@ -237,11 +257,14 @@ const renderNotebookContent = (text: string) => {
 };
 
 const RoomApp: React.FC = () => {
-    const { closeApp, characters, activeCharacterId, setActiveCharacterId, updateCharacter, apiConfig, addToast, userProfile } = useOS();
-    
+    const { closeApp, openApp, characters, activeCharacterId, setActiveCharacterId, updateCharacter, apiConfig, addToast, userProfile } = useOS();
+
     // Core State
     const [viewState, setViewState] = useState<'select' | 'room' | 'pixelHome'>('select');
-    const [homeTab, setHomeTab] = useState<'room' | 'pixelHome'>('room');
+    // 小小窝里的三个独立分区：房间 / 像素家园 / 家园（家园是另一套体系，单独成区）
+    const [homeTab, setHomeTab] = useState<'room' | 'pixelHome' | 'worldHome'>('room');
+    // 家园「正式开始玩」（进世界/编辑）时全屏，隐去顶部三栏
+    const [worldHomeFull, setWorldHomeFull] = useState(false);
     const [mode, setMode] = useState<'view' | 'edit'>('view');
     const [items, setItems] = useState<RoomItem[]>([]);
     
@@ -516,12 +539,12 @@ const RoomApp: React.FC = () => {
 
             await injectMemoryPalace(c, recentMsgs);
             const baseContext = ContextBuilder.buildCoreContext(c, userProfile, true); // Keep Full Context
-            
+
             // DEBUG FIX: Sanitize and truncate interactables context to prevent huge Base64 leakage
-            const interactables = currentItems.filter(i => i.isInteractive).map(i => ({ 
-                id: i.id, 
-                name: i.name, 
-                context: (i.descriptionPrompt || '').substring(0, 200) 
+            const interactables = currentItems.filter(i => i.isInteractive).map(i => ({
+                id: i.id,
+                name: i.name,
+                context: (i.descriptionPrompt || '').substring(0, 200)
             }));
 
             let prompt = `${baseContext}
@@ -578,8 +601,8 @@ ${!shouldGenerateTodo ? `(系统: 今日待办已存在，无需生成，请忽�
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${apiConfig.apiKey}` },
                 body: JSON.stringify({ 
-                    model: apiConfig.model, 
-                    messages: [{ role: "user", content: prompt }], 
+                    model: apiConfig.model,
+                    messages: [{ role: "user", content: prompt }],
                     temperature: 0.5, // Lower temp for stability
                     max_tokens: 8000,
                     // Safety Settings injection for Gemini-based proxies
@@ -1054,61 +1077,140 @@ ${!shouldGenerateTodo ? `(系统: 今日待办已存在，无需生成，请忽�
 
     // SELECT SCREEN
     if (viewState === 'select') {
+        // 像素家园=深色，小小窝/家园=浅色（参考稿）
+        const dark = homeTab === 'pixelHome';
+        const th = dark ? {
+            pageBg: 'linear-gradient(180deg,#0c1024 0%,#141031 45%,#1a1330 100%)',
+            stars: 'radial-gradient(1px 1px at 12% 18%,rgba(255,255,255,.5),transparent),radial-gradient(1px 1px at 78% 12%,rgba(255,230,180,.5),transparent),radial-gradient(1.5px 1.5px at 40% 30%,rgba(207,226,255,.4),transparent),radial-gradient(1px 1px at 88% 40%,rgba(255,255,255,.4),transparent),radial-gradient(1px 1px at 24% 64%,rgba(255,255,255,.35),transparent),radial-gradient(1px 1px at 64% 78%,rgba(255,230,180,.35),transparent)',
+            back: 'text-amber-100/70 hover:text-amber-100',
+            title: '#fdf6ee', titleShadow: 'rgba(180,160,255,.45)',
+            line: 'rgba(212,185,120,.55)', sub: 'text-amber-200/70',
+            tabWrapBg: 'rgba(255,255,255,.04)', tabWrapBorder: 'rgba(212,185,120,.25)',
+            tabActive: { background: 'linear-gradient(180deg,rgba(124,92,180,.5),rgba(80,60,140,.35))', color: '#f4ecff', border: '1px solid rgba(190,160,255,.4)', boxShadow: '0 0 18px rgba(150,110,220,.4)' } as React.CSSProperties,
+            tabIdle: 'rgba(220,215,240,.55)', diamond: '#b89cff',
+            desc: 'text-amber-100/45', empty: 'text-amber-100/40',
+            tints: ROOM_CARD_TINTS, cardBorder: 'rgba(212,185,120,.28)', cardShadow: '0 10px 26px rgba(0,0,0,.4)',
+            inner: 'rgba(212,185,120,.22)', gem: 'rgba(226,200,130,.7)',
+            tick: 'rgba(212,185,120,.16)', halo: 'rgba(190,160,235,.22)', ring1: 'rgba(212,185,120,.4)', ring2: 'rgba(212,185,120,.18)', avGlow: 'rgba(160,130,225,.5)',
+            badgeBg: 'rgba(246,241,231,.95)', badgeIcon: 'text-amber-700', badgeShadow: '0 1px 5px rgba(0,0,0,.45)',
+            name: 'text-amber-50', cardSub: 'text-amber-100/45', footer: 'text-amber-200/35', dot: 'text-amber-200/20',
+        } : {
+            pageBg: 'linear-gradient(180deg,#efe9f7 0%,#f4eff9 45%,#f7f2fb 100%)',
+            stars: 'radial-gradient(1.5px 1.5px at 14% 16%,rgba(190,160,225,.45),transparent),radial-gradient(1px 1px at 80% 12%,rgba(220,190,235,.5),transparent),radial-gradient(1.5px 1.5px at 42% 28%,rgba(180,200,240,.4),transparent),radial-gradient(1px 1px at 86% 42%,rgba(200,175,230,.4),transparent),radial-gradient(1px 1px at 22% 66%,rgba(210,185,235,.35),transparent),radial-gradient(1px 1px at 66% 80%,rgba(200,210,240,.35),transparent)',
+            back: 'text-purple-300 hover:text-purple-500',
+            title: '#6a5790', titleShadow: 'rgba(170,150,220,.4)',
+            line: 'rgba(150,120,190,.5)', sub: 'text-purple-400/70',
+            tabWrapBg: 'rgba(255,255,255,.55)', tabWrapBorder: 'rgba(160,130,200,.22)',
+            tabActive: { background: 'linear-gradient(180deg,#ffffff,#f0e9fa)', color: '#5b4b7a', border: '1px solid rgba(170,140,210,.5)', boxShadow: '0 2px 12px rgba(160,120,210,.25)' } as React.CSSProperties,
+            tabIdle: 'rgba(110,90,140,.6)', diamond: '#a78bd6',
+            desc: 'text-purple-400/70', empty: 'text-purple-300/70',
+            tints: ROOM_CARD_TINTS_LIGHT, cardBorder: 'rgba(170,140,210,.3)', cardShadow: '0 8px 22px rgba(150,120,200,.18)',
+            inner: 'rgba(170,140,210,.22)', gem: 'rgba(190,160,220,.85)',
+            tick: 'rgba(170,140,210,.16)', halo: 'rgba(200,175,235,.3)', ring1: 'rgba(180,150,215,.5)', ring2: 'rgba(180,150,215,.25)', avGlow: 'rgba(190,160,235,.4)',
+            badgeBg: '#ffffff', badgeIcon: 'text-purple-500', badgeShadow: '0 1px 5px rgba(120,90,170,.3)',
+            name: 'text-purple-900', cardSub: 'text-purple-400/70', footer: 'text-purple-300/70', dot: 'text-purple-300/40',
+        };
         return (
-            <div className="h-full w-full bg-slate-50 flex flex-col font-light">
-                <div className="pt-12 pb-3 px-6 bg-white sticky top-0 z-20 shrink-0">
-                    <div className="flex items-center justify-between h-12">
-                        <button onClick={closeApp} className="p-2 -ml-2 rounded-full hover:bg-slate-100 active:scale-90 transition-transform">
-                            <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" strokeWidth={2} stroke="currentColor" className="w-6 h-6 text-slate-600"><path strokeLinecap="round" strokeLinejoin="round" d="M15.75 19.5 8.25 12l7.5-7.5" /></svg>
-                        </button>
-                        <span className="font-bold text-slate-700 text-lg tracking-wide">
-                            {homeTab === 'room' ? '拜访谁的房间?' : '谁的像素家园?'}
-                        </span>
-                        <div className="w-8"></div>
-                    </div>
-                    {/* Tab 切换 */}
-                    <div className="flex gap-1 mt-2 bg-slate-100 rounded-xl p-1">
-                        <button
-                            onClick={() => setHomeTab('room')}
-                            className={`flex-1 py-2 rounded-lg text-xs font-bold transition-all ${
-                                homeTab === 'room' ? 'bg-white text-slate-700 shadow-sm' : 'text-slate-400'
-                            }`}
-                        >
-                            🏠 小小窝
-                        </button>
-                        <button
-                            onClick={() => setHomeTab('pixelHome')}
-                            className={`flex-1 py-2 rounded-lg text-xs font-bold transition-all ${
-                                homeTab === 'pixelHome' ? 'bg-white text-slate-700 shadow-sm' : 'text-slate-400'
-                            }`}
-                        >
-                            🎮 像素家园
-                        </button>
-                    </div>
-                </div>
-               <div className="p-6 grid grid-cols-2 gap-4 overflow-y-auto pb-20 no-scrollbar">
-    {characters.map(c => (
-        <div key={c.id} onClick={() => {
-            if (homeTab === 'pixelHome') {
-                setActiveCharacterId(c.id);
-                setViewState('pixelHome');
-            } else {
-                handleEnterRoom(c);
-            }
-        }} className="min-h-[180px] bg-white rounded-2xl shadow-sm border border-slate-100 p-4 flex flex-col items-center justify-center gap-3 cursor-pointer active:scale-95 transition-all relative overflow-hidden group hover:shadow-md">
-                            <div className="w-20 h-20 rounded-full p-1 border-2 border-slate-100 relative">
-                                <img src={c.avatar} className="w-full h-full rounded-full object-cover" />
-                                <div className="absolute bottom-0 right-0 w-6 h-6 bg-green-400 rounded-full border-2 border-white flex items-center justify-center">
-                                    {homeTab === 'pixelHome'
-                                        ? <span className="text-[10px]">🎮</span>
-                                        : <img src={twemojiUrl('1f3e0')} alt="home" className="w-3 h-3" />
-                                    }
-                                </div>
-                            </div>
-                            <span className="font-bold text-slate-700 text-sm">{c.name}</span>
+            <div className="h-full w-full flex flex-col font-light relative overflow-hidden" style={{ background: th.pageBg }}>
+                {/* 星点氛围 */}
+                <div className="absolute inset-0 pointer-events-none opacity-70" style={{ backgroundImage: th.stars }} />
+
+                {/* 顶部：标题 + Tab（家园正式开始玩——进世界/编辑——时整块隐去，全屏沉浸） */}
+                <div className={`relative z-10 pt-12 px-6 shrink-0 ${homeTab === 'worldHome' && worldHomeFull ? 'hidden' : ''}`}>
+                    <button onClick={closeApp} className={`absolute left-4 top-12 p-2 rounded-full active:scale-90 transition-all ${th.back}`}>
+                        <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" strokeWidth={2} stroke="currentColor" className="w-6 h-6"><path strokeLinecap="round" strokeLinejoin="round" d="M15.75 19.5 8.25 12l7.5-7.5" /></svg>
+                    </button>
+                    <div className="text-center">
+                        <h1 className="text-[26px] tracking-[0.15em]" style={{ fontFamily: `'Noto Serif SC',serif`, color: th.title, textShadow: `0 2px 18px ${th.titleShadow}` }}>拜访谁的房间？</h1>
+                        <div className="flex items-center justify-center gap-2 mt-1.5">
+                            <span className="h-px w-10" style={{ background: `linear-gradient(90deg,transparent,${th.line})` }} />
+                            <span className={`text-[9px] tracking-[0.45em] font-bold ${th.sub}`}>✦ VISIT ROOM ✦</span>
+                            <span className="h-px w-10" style={{ background: `linear-gradient(270deg,transparent,${th.line})` }} />
                         </div>
-                    ))}
+                    </div>
+
+                    {/* Tab 栏：三个分区都在这一页内切换，不跳走 */}
+                    <div className="mt-5 rounded-2xl p-1.5 flex gap-1" style={{ background: th.tabWrapBg, border: `1px solid ${th.tabWrapBorder}`, boxShadow: 'inset 0 1px 0 rgba(255,255,255,.06)' }}>
+                        {([
+                            { id: 'room', label: '🏠 小小窝' },
+                            { id: 'worldHome', label: '🌍 家园' },
+                            { id: 'pixelHome', label: '🎮 像素家园' },
+                        ] as const).map(tab => {
+                            const active = homeTab === tab.id;
+                            return (
+                                <button key={tab.id}
+                                    onClick={() => setHomeTab(tab.id)}
+                                    className="relative flex-1 py-2.5 rounded-xl text-[12px] font-bold tracking-wide transition-all"
+                                    style={active ? th.tabActive : { color: th.tabIdle }}>
+                                    {tab.label}
+                                    {active && <span className="absolute -bottom-[7px] left-1/2 -translate-x-1/2 w-2 h-2 rotate-45" style={{ background: th.diamond, boxShadow: `0 0 8px ${th.diamond}` }} />}
+                                </button>
+                            );
+                        })}
+                    </div>
                 </div>
+
+                {homeTab === 'worldHome' ? (
+                    /* 家园分区：直接内嵌大世界本体，保持顶部三栏（不再跳走/不再多一层封面） */
+                    <div className={`relative z-10 flex-1 min-h-0 overflow-hidden ${worldHomeFull ? '' : 'mt-3'}`}>
+                        <WorldHomeApp embedded onFullscreen={setWorldHomeFull} />
+                    </div>
+                ) : (
+                    <>
+                        {/* 描述 */}
+                        <p className={`relative z-10 text-center text-[11px] mt-4 px-8 leading-relaxed ${th.desc}`}>
+                            {homeTab === 'pixelHome' ? '像素风的家——自由装修、布置房间、潜入记忆。' : '走进谁的房间，看看 ta 此刻在做什么、翻翻屋里的小物件。'}
+                        </p>
+
+                        {/* 角色网格 */}
+                        <div className="relative z-10 flex-1 overflow-y-auto no-scrollbar px-5 pt-4 pb-4">
+                            {characters.length === 0 ? (
+                                <div className={`text-center text-[12px] py-16 ${th.empty}`}>还没有角色，先去「神经链接」创建一个吧。</div>
+                            ) : (
+                                <div className="grid grid-cols-2 gap-4">
+                                    {characters.map((c, i) => {
+                                        const pixel = homeTab === 'pixelHome';
+                                        const tint = th.tints[i % th.tints.length];
+                                        return (
+                                            <button key={c.id} onClick={() => { if (pixel) { setActiveCharacterId(c.id); setViewState('pixelHome'); } else handleEnterRoom(c); }}
+                                                className="group relative rounded-2xl px-3 pt-8 pb-5 flex flex-col items-center active:scale-95 transition-all overflow-hidden"
+                                                style={{ background: tint, border: `1px solid ${th.cardBorder}`, boxShadow: th.cardShadow }}>
+                                                {/* 内描金细框 + 四角宝石 */}
+                                                <div className="absolute inset-[7px] rounded-xl pointer-events-none" style={{ border: `1px solid ${th.inner}` }} />
+                                                <span className="absolute top-[10px] left-[10px] w-1.5 h-1.5 rotate-45" style={{ background: th.gem }} />
+                                                <span className="absolute top-[10px] right-[10px] w-1.5 h-1.5 rotate-45" style={{ background: th.gem }} />
+                                                <span className="absolute bottom-[10px] left-[10px] w-1.5 h-1.5 rotate-45" style={{ background: th.gem }} />
+                                                <span className="absolute bottom-[10px] right-[10px] w-1.5 h-1.5 rotate-45" style={{ background: th.gem }} />
+                                                {/* 头像 + 罗盘纹 + 双层环 */}
+                                                <div className="relative w-[92px] h-[92px] flex items-center justify-center">
+                                                    <div className="absolute w-[124px] h-[124px] rounded-full" style={{ background: `repeating-conic-gradient(from 0deg, ${th.tick} 0deg 2.4deg, transparent 2.4deg 9deg)`, WebkitMaskImage: 'radial-gradient(circle, transparent 40%, #000 44%, #000 50%, transparent 55%)', maskImage: 'radial-gradient(circle, transparent 40%, #000 44%, #000 50%, transparent 55%)' }} />
+                                                    <div className="absolute w-[110px] h-[110px] rounded-full" style={{ background: `radial-gradient(circle, ${th.halo}, transparent 62%)` }} />
+                                                    <div className="absolute inset-[8px] rounded-full" style={{ border: `1px solid ${th.ring1}` }} />
+                                                    <div className="absolute inset-[12px] rounded-full" style={{ border: `1px solid ${th.ring2}` }} />
+                                                    <div className="w-[70px] h-[70px] rounded-full overflow-hidden" style={{ boxShadow: `0 0 18px ${th.avGlow}` }}>
+                                                        <img src={c.avatar} className="w-full h-full object-cover" alt={c.name} />
+                                                    </div>
+                                                    <div className="absolute bottom-0 right-1.5 w-[22px] h-[22px] rounded-full flex items-center justify-center" style={{ background: th.badgeBg, boxShadow: th.badgeShadow }}>
+                                                        {pixel ? <span className="text-[10px]">🎮</span> : (
+                                                            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2} className={`w-3.5 h-3.5 ${th.badgeIcon}`}><path strokeLinecap="round" strokeLinejoin="round" d="M2.25 12l8.954-8.955c.44-.439 1.152-.439 1.591 0L21.75 12M4.5 9.75v10.125c0 .621.504 1.125 1.125 1.125H9.75v-4.875c0-.621.504-1.125 1.125-1.125h2.25c.621 0 1.125.504 1.125 1.125V21h4.125c.621 0 1.125-.504 1.125-1.125V9.75" /></svg>
+                                                        )}
+                                                    </div>
+                                                </div>
+                                                <span className={`mt-3 text-[14px] font-semibold tracking-wide ${th.name}`} style={{ fontFamily: `'Noto Serif SC',serif` }}>{c.name}</span>
+                                                <span className={`mt-0.5 text-[10px] ${th.cardSub}`}>{pixel ? '进 ta 的像素家园' : '拜访 ta 的房间'}</span>
+                                            </button>
+                                        );
+                                    })}
+                                </div>
+                            )}
+                        </div>
+
+                        {/* 底部装饰 */}
+                        <div className={`relative z-10 shrink-0 pb-4 flex items-center justify-center gap-2.5 text-[8.5px] tracking-[0.35em] font-bold ${th.footer}`}>
+                            <span>EXPLORE</span><span className={th.dot}>◆</span><span>CONNECT</span><span className={th.dot}>◆</span><span>DISCOVER</span>
+                        </div>
+                    </>
+                )}
             </div>
         );
     }
@@ -1152,10 +1254,16 @@ ${!shouldGenerateTodo ? `(系统: 今日待办已存在，无需生成，请忽�
     return (
         <div className="h-full w-full bg-[#f8fafc] flex flex-col relative overflow-hidden font-sans select-none">
             
+            {/* 进门一次性把整个房间生成出来（按次计费，所以一趟读完，进去就能一口气逛完）。
+                慢是必然的，这里用小字向用户解释清楚为什么。 */}
             {isInitializing && (
-                <div className="absolute inset-0 z-[500] bg-white flex flex-col items-center justify-center animate-fade-in">
+                <div className="absolute inset-0 z-[500] bg-white flex flex-col items-center justify-center animate-fade-in px-10 text-center">
                     <div className="text-4xl mb-4 animate-bounce"><Door size={48} className="text-slate-400" /></div>
                     <p className="text-sm font-bold text-slate-500">{initStatusText}</p>
+                    <p className="text-[11px] text-slate-400/90 leading-[1.7] mt-3 max-w-[268px]">
+                        正在一趟把整个房间「读」出来——ta 此刻的状态、屋里<b className="text-slate-500">每一件物品</b>的样子和 ta 的反应、今天的计划与随笔，都在这一次里生成。
+                        <br />物件越多越久，但只生成这一次，进去就能一口气全看完，之后点哪件都不再等待。
+                    </p>
                 </div>
             )}
 

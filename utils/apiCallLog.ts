@@ -50,6 +50,8 @@ export interface ApiCallLogEntry extends ApiCallMeta {
     completionTokens?: number;
     /** 总 token（total_tokens） */
     totalTokens?: number;
+    /** 请求从发起到响应 / 报错的耗时 ms（NetworkError 类失败时 = 等了多久才断） */
+    durationMs?: number;
 }
 
 const PRESETS_STORAGE_KEY = 'os_api_presets';
@@ -148,6 +150,7 @@ export function recordApiCall(input: {
     ok: boolean;
     response?: unknown;
     meta?: ApiCallMeta;
+    durationMs?: number;
 }): void {
     try {
         const baseUrl = deriveBaseUrl(input.url);
@@ -166,6 +169,7 @@ export function recordApiCall(input: {
             promptTokens: usage.prompt,
             completionTokens: usage.completion,
             totalTokens: usage.total,
+            durationMs: input.durationMs,
             appId: meta.appId,
             appName: meta.appName,
             charId: meta.charId,

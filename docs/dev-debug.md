@@ -33,7 +33,7 @@ isDevDebugAvailable()  // utils/devDebug.ts
 
 **怎么关掉**：
 - **刷新页面**：`manualUnlock` 清零 → prod 回到隐藏；非 prod 因 `__BUILD_BADGE_VISIBLE__` 默认可见，刷新后照常显示（即「非 prod 一直开」）。
-- **面板底部「关闭」按钮**：`closeDevDebug()` 置 `forceClosed`，**任意分支**强制关掉；会话级，**刷新后非 prod 自动恢复**。顺手把浮球位置收回默认、面板收起；**`isCaptureEnabled` 也会一并返 false**（避免面板看着关了但业务代码继续往 localStorage 写日志的隐私债），但**里面的捕获 / 行为开关存档不动**——刷新恢复后可见性回来，里面勾的还是原样。
+- **面板底部「关闭」按钮**：`closeDevDebug()` 置 `forceClosed`，**任意分支**强制关掉；会话级，**刷新后非 prod 自动恢复**。顺手把浮球位置收回默认、面板收起；**`isCaptureEnabled` 跟 `isDevDebugAvailable` 绑定**——只要面板看不见（关闭 / prod 未解锁 / prod 解锁后刷新 / 非 prod 强制关闭）都返 false，避免业务代码继续往 localStorage 写日志的隐私债。**里面的捕获 / 行为开关存档不动**——刷新恢复后可见性回来，里面勾的还是原样，但只有面板可见时才真正录。
 
 > 可用性 = `!forceClosed && (__BUILD_BADGE_VISIBLE__ || manualUnlock)`，三个量里只有 `__BUILD_BADGE_VISIBLE__` 是构建期常量，另两个是会话级内存标志（刷新归零）。
 
@@ -59,8 +59,9 @@ isDevDebugAvailable()  // utils/devDebug.ts
 |------|--------|
 | `skipPromptBuild` | `utils/chatRequestPayload.ts:158` |
 | `skipEmotionEval` | `context/OSContext.tsx:1436`、`hooks/useChatAI.ts:439 / 685` |
-| 捕获类 `api` | `utils/safeApi.ts`（调 `appendDevDebugApiLog`，仅普通聊天直发模型） |
+| 捕获类 `api` | `utils/safeApi.ts`（调 `appendDevDebugApiLog`，普通聊天直发 + Character 的记忆精炼/归档/导入/批量总结/印象生成，凡走 `safeFetchJson` 的 chat completions 都算） |
 | 捕获类 `instant-push` | `utils/activeMsgRuntime.ts`、`utils/instantPushClient.ts`（调 `appendDevDebugInstantPushLog`） |
+| 捕获类 `lifecycle` | `utils/devDebug.ts` 自带的 `installDevDebugLifecycleCapture()`（`App.tsx` 启动时挂一次，监听器常驻、抓不抓走门禁） |
 | 总开关 `captureEnabled` | `utils/devDebug.ts` 的 `isCaptureEnabled()` 闸门——关掉时所有捕获类都不抓 |
 
 ---
@@ -130,8 +131,9 @@ sullyos.devDebug.log.v1.<branch>        ← 分类捕获日志（各类混存，
 | `skipPromptBuild` | 行为 | 只发聊天历史，不注入 system prompt | 双语 / MCD / HTML / thinking 等增强全部关掉 |
 | `skipEmotionEval` | 行为 | 主回复照常，但不跑本地 / Instant Push 的 emotion eval | 关掉后情绪不更新 |
 | `captureEnabled`<br>（记录日志·总开关） | 行为 | 日志录制总闸：关掉时所有捕获类都不抓 | 默认关；关掉只是停录，**不清**已抓日志 |
-| 捕获类 `api` | 捕获 | 抓普通聊天直发模型的 chat completions 请求 + 响应（`safeApi`） | 取消勾选只停此后抓取，**不清**已有日志 |
+| 捕获类 `api` | 捕获 | 抓所有走 `safeFetchJson`（`safeApi`）的 chat completions 请求 + 响应：普通聊天直发，外加 Character 里的记忆精炼/强制归档/导入清洗/批量总结/印象生成。每条带 `durationMs`（最后一次 attempt 从发起到成功/报错的耗时）和 `requestChars`（请求体字符数，messages 折叠后靠它看体积） | 取消勾选只停此后抓取，**不清**已有日志 |
 | 捕获类 `instant-push` | 捕获 | 抓 instant push 通道：经 worker 的 LLM 交换 + SSE 投递结果（超时/收到/失败） | 同上，取消勾选不清日志 |
+| 捕获类 `lifecycle` | 捕获 | 抓页面前后台/焦点/网络状态变化：`visibilitychange`、`focus`/`blur`、`pagehide`/`pageshow`（含 bfcache `persisted` 标记）、`online`/`offline`、`freeze`/`resume`（Chromium 系）。跟 api 类对时间线用——API 报错前后紧挨着 `visibilitychange → hidden`，基本就是切后台/锁屏把 fetch 冻死的 | 同上，取消勾选不清日志 |
 | `exposeLogDetail`<br>（记录完整内容） | 抓取 | 关（默认）：`messages` 聊天历史数组整组换成一句 `…共 N 项（已折叠）`；开：整段存 | 影响**抓取 / 存储**；要完整须复现前打开，已抓的折叠版不可还原 |
 
 捕获日志：各类**混存在一个数组**里、每条带 `category`，全局最多留 **100 条 / 1 MB**（先到先淘汰）。因为长文本在写入时就折叠了（见第九节），实际存的是瘦身版、很省空间，1 MB 基本撑不爆、轻松存满 100 条；导出（复制 / 下载）默认导全部、自动带上当前分支 + commit，并对密钥字段脱敏。

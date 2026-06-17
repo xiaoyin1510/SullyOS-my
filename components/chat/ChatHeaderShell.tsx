@@ -28,12 +28,16 @@ interface ChatHeaderShellProps {
     onTriggerAI: () => void;
     onShowCharsPanel: () => void;
     onDeleteBuff?: (buffId: string) => void;
+    /** 隐藏顶栏情绪 buff 栏（Appearance 里的「显示情绪栏」开关）。 */
+    hideBuffs?: boolean;
     headerStyle?: 'default' | 'minimal' | 'gradient' | 'wechat' | 'telegram' | 'discord' | 'pixel';
     avatarShape?: 'circle' | 'rounded' | 'square';
     headerAlign?: 'left' | 'center';
     headerDensity?: 'compact' | 'default' | 'airy';
     statusStyle?: 'subtle' | 'pill' | 'dot';
     chromeStyle?: 'soft' | 'flat' | 'floating' | 'pixel';
+    /** 动森彩蛋模式：头部换成木质草绿栏。 */
+    acnh?: boolean;
 }
 
 const COLLAPSED_BUFF_MIN = 2;
@@ -67,14 +71,16 @@ const ChatHeaderShell: React.FC<ChatHeaderShellProps> = ({
     onTriggerAI,
     onShowCharsPanel,
     onDeleteBuff,
+    hideBuffs = false,
     headerStyle = 'default',
     avatarShape = 'circle',
     headerAlign = 'left',
     headerDensity = 'default',
     statusStyle = 'subtle',
     chromeStyle = 'soft',
+    acnh = false,
 }) => {
-    const buffs: CharacterBuff[] = activeCharacter.activeBuffs || [];
+    const buffs: CharacterBuff[] = hideBuffs ? [] : (activeCharacter.activeBuffs || []);
     const [openBuff, setOpenBuff] = useState<CharacterBuff | null>(null);
     const [isBuffListExpanded, setIsBuffListExpanded] = useState(false);
     const [confirmDeleteBuff, setConfirmDeleteBuff] = useState<CharacterBuff | null>(null);
@@ -182,8 +188,15 @@ const ChatHeaderShell: React.FC<ChatHeaderShellProps> = ({
     const isPixelHeader = headerStyle === 'pixel';
     const useCenteredLayout = headerAlign === 'center';
     const avatarRadiusClass = avatarShape === 'square' ? 'rounded-sm' : avatarShape === 'rounded' ? 'rounded-xl' : 'rounded-full';
+    // 动森：情绪 buff 胶囊统一奶油底 + 棕字，和谐进绿顶栏（否则各 buff 自带的彩色底铺在绿上很糊）
+    const buffChipStyle = (buff: CharacterBuff): React.CSSProperties => acnh
+        ? { color: '#6b5a3e', borderColor: '#e6dab4', background: '#fbf4de' }
+        : { color: buff.color || '#db2777', borderColor: `${buff.color || '#db2777'}40`, background: `${buff.color || '#db2777'}10` };
 
     const headerToneClass =
+        acnh
+          ? 'bg-[#a8d6bb] border-b-[3px] border-[#86c29a] shadow-[0_3px_0_rgba(110,160,130,0.22)]'
+          :
         headerStyle === 'gradient'
             ? 'bg-gradient-to-r from-primary/20 via-primary/10 to-white/80 backdrop-blur-xl border-b border-slate-200/60 shadow-sm'
             : headerStyle === 'minimal'
@@ -202,20 +215,23 @@ const ChatHeaderShell: React.FC<ChatHeaderShellProps> = ({
                           ? 'bg-white/85 backdrop-blur-xl border-b border-white/70 shadow-sm'
                           : 'bg-white/80 backdrop-blur-xl border-b border-slate-200/60 shadow-sm';
     const headerBaseHeight = headerDensity === 'compact' ? '5rem' : headerDensity === 'airy' ? '7rem' : '6rem';
-    const headerDensityClass = useCenteredLayout
-        ? (headerDensity === 'compact' ? 'px-4 py-2' : headerDensity === 'airy' ? 'px-6 py-4' : 'px-5 py-3')
-        : (headerDensity === 'compact' ? 'px-4 pb-3' : headerDensity === 'airy' ? 'px-6 pb-5' : 'px-5 pb-4');
-    const headerSafeStyle: React.CSSProperties = useCenteredLayout
-        ? { minHeight: `calc(${headerBaseHeight} + var(--safe-top))`, paddingTop: `calc(var(--safe-top) + ${headerDensity === 'compact' ? '0.5rem' : headerDensity === 'airy' ? '1rem' : '0.75rem'})` }
-        : { height: `calc(${headerBaseHeight} + var(--safe-top))` };
-    const primaryTextClass = isDarkHeader ? 'text-white' : isPixelHeader ? 'text-[#fff7ed]' : 'text-slate-800';
-    const secondaryTextClass = isDarkHeader ? 'text-slate-400' : isPixelHeader ? 'text-[#f3ddc7]' : 'text-slate-400';
-    const iconButtonClass = isDarkHeader
+    // 两种对齐都用对称 py，让内容垂直居中（原标准布局只给 pb → 底贴、上方留白、整体不居中）。
+    const headerDensityClass = headerDensity === 'compact' ? 'px-4 py-2' : headerDensity === 'airy' ? 'px-6 py-4' : 'px-5 py-3';
+    // safe-top 已由外层 spacer 单独让位（见 return：透明 + backdrop-blur 的状态栏占位条），
+    // header 主体不再把 --safe-top 算进高度（否则会让两次）；内容在 headerBaseHeight 内垂直居中。
+    const headerSafeStyle: React.CSSProperties = { minHeight: headerBaseHeight };
+    const primaryTextClass = acnh ? 'text-[#6b5a3e]' : isDarkHeader ? 'text-white' : isPixelHeader ? 'text-[#fff7ed]' : 'text-slate-800';
+    const secondaryTextClass = acnh ? 'text-[#5a9e7a]' : isDarkHeader ? 'text-slate-400' : isPixelHeader ? 'text-[#f3ddc7]' : 'text-slate-400';
+    const iconButtonClass = acnh
+        ? 'text-[#6b5a3e] hover:bg-black/5 rounded-full'
+        : isDarkHeader
         ? 'text-slate-200 hover:bg-white/10 rounded-full'
         : isPixelHeader
           ? 'text-[#fff7ed] hover:bg-[#f8f0e0]/20 rounded-[4px] border-2 border-[#8f674a] bg-[#f8f0e0]/10'
           : 'text-slate-500 hover:bg-slate-100 rounded-full';
-    const actionButtonClass = isDarkHeader
+    const actionButtonClass = acnh
+        ? 'text-[#6b5a3e] hover:bg-black/5 rounded-full'
+        : isDarkHeader
         ? 'text-sky-300 hover:bg-sky-400/10 rounded-full'
         : isPixelHeader
           ? 'text-[#fff7ed] hover:bg-[#f8f0e0]/20 rounded-[4px] border-2 border-[#8f674a] bg-[#f8f0e0]/10'
@@ -239,7 +255,7 @@ const ChatHeaderShell: React.FC<ChatHeaderShellProps> = ({
     const renderBuffRow = (centered: boolean) => {
         if (buffs.length === 0) return null;
         return (
-            <div className={`relative w-full min-w-0 max-w-full ${centered ? 'flex justify-center' : ''}`}>
+            <div className={`sully-chat-buffs relative w-full min-w-0 max-w-full ${centered ? 'flex justify-center' : ''}`}>
                 <div
                     ref={buffPreviewRef}
                     className={`flex w-full min-w-0 max-w-full items-center gap-0.5 overflow-x-auto whitespace-nowrap pr-1 [-ms-overflow-style:none] [scrollbar-width:none] [&::-webkit-scrollbar]:hidden ${centered ? 'justify-center' : ''}`}
@@ -255,7 +271,7 @@ const ChatHeaderShell: React.FC<ChatHeaderShellProps> = ({
                             onMouseUp={handleLongPressEnd}
                             onMouseLeave={handleLongPressEnd}
                             className="shrink-0 max-w-[8.75rem] truncate text-[8px] leading-none px-1 py-[3px] rounded-[10px] font-bold border cursor-pointer transition-colors select-none"
-                            style={{ color: buff.color || '#db2777', borderColor: `${buff.color || '#db2777'}40`, background: `${buff.color || '#db2777'}10` }}
+                            style={buffChipStyle(buff)}
                             title={buff.label}
                         >
                             {buff.emoji ? `${buff.emoji} ` : ''}
@@ -265,7 +281,7 @@ const ChatHeaderShell: React.FC<ChatHeaderShellProps> = ({
                     {hiddenBuffCount > 0 && (
                         <button
                             onClick={(e) => { e.stopPropagation(); setIsBuffListExpanded((prev) => !prev); }}
-                            className="shrink-0 min-w-[22px] text-[8px] leading-none px-1 py-[3px] rounded-[10px] font-bold border border-slate-300 text-slate-500 bg-slate-100/90 hover:bg-slate-200/80 transition-colors"
+                            className={`shrink-0 min-w-[22px] text-[8px] leading-none px-1 py-[3px] rounded-[10px] font-bold border transition-colors ${acnh ? 'border-[#e6dab4] text-[#6b5a3e] bg-[#fbf4de]' : 'border-slate-300 text-slate-500 bg-slate-100/90 hover:bg-slate-200/80'}`}
                             title="查看全部状态"
                         >
                             +{hiddenBuffCount}
@@ -280,7 +296,7 @@ const ChatHeaderShell: React.FC<ChatHeaderShellProps> = ({
                                 key={`measure-${buff.id}`}
                                 ref={(node) => { measureChipRefs.current[index] = node; }}
                                 className="inline-flex shrink-0 max-w-[8.75rem] text-[8px] leading-none px-1 py-[3px] rounded-[10px] font-bold border"
-                                style={{ color: buff.color || '#db2777', borderColor: `${buff.color || '#db2777'}40`, background: `${buff.color || '#db2777'}10` }}
+                                style={buffChipStyle(buff)}
                             >
                                 {buff.emoji ? `${buff.emoji} ` : ''}
                                 {buff.label}
@@ -295,7 +311,7 @@ const ChatHeaderShell: React.FC<ChatHeaderShellProps> = ({
     const floatingStatusNodes = (lastTokenUsage || isInstantSending || isEmotionEvaluating || isMemoryPalaceProcessing) ? (
         <div className="absolute right-12 top-1/2 -translate-y-1/2 flex items-center gap-1.5 pointer-events-none">
             {lastTokenUsage && (
-                <div className={`text-[9px] px-1.5 py-0.5 rounded-md font-mono border ${isDarkHeader ? 'bg-slate-800 text-slate-300 border-white/10' : isPixelHeader ? 'bg-[#fff7ed] text-[#8f674a] border-[#8f674a]/20' : 'bg-slate-100/95 text-slate-400 border-slate-200'}`}>
+                <div className={`sully-chat-token text-[9px] px-1.5 py-0.5 rounded-md font-mono border ${isDarkHeader ? 'bg-slate-800 text-slate-300 border-white/10' : isPixelHeader ? 'bg-[#fff7ed] text-[#8f674a] border-[#8f674a]/20' : 'bg-slate-100/95 text-slate-400 border-slate-200'}`}>
                     {lastTokenUsage}
                 </div>
             )}
@@ -319,8 +335,8 @@ const ChatHeaderShell: React.FC<ChatHeaderShellProps> = ({
 
     const renderCenteredInfo = () => (
         <div className="flex w-full min-w-0 max-w-full flex-col items-center text-center">
-            <img src={activeCharacter.avatar} className={`w-10 h-10 object-cover shadow-sm ${avatarRadiusClass}`} alt="avatar" />
-            <div className={`mt-1 font-bold ${primaryTextClass}`}>{activeCharacter.name}</div>
+            <img src={activeCharacter.avatar} className={`sully-chat-avatar w-10 h-10 object-cover shadow-sm ${avatarRadiusClass}`} alt="avatar" />
+            <div className={`sully-chat-name mt-1 font-bold ${primaryTextClass}`}>{activeCharacter.name}</div>
             {buffs.length > 0 && (
                 <div className="mt-1 min-h-[18px] w-full">
                     {renderBuffRow(true)}
@@ -331,13 +347,13 @@ const ChatHeaderShell: React.FC<ChatHeaderShellProps> = ({
 
     const renderStandardInfo = () => (
         <>
-            <img src={activeCharacter.avatar} className={`w-10 h-10 object-cover shadow-sm ${avatarRadiusClass}`} alt="avatar" />
-            <div className="flex-1 min-w-0 flex flex-col items-start text-left">
-                <div className={`font-bold ${primaryTextClass}`}>{activeCharacter.name}</div>
-                <div className="flex items-center gap-2 flex-wrap">
+            <img src={activeCharacter.avatar} className={`sully-chat-avatar w-10 h-10 object-cover shadow-sm ${avatarRadiusClass}`} alt="avatar" />
+            <div className="sully-chat-info flex-1 min-w-0 flex flex-col items-start text-left">
+                <div className={`sully-chat-name font-bold ${primaryTextClass}`}>{activeCharacter.name}</div>
+                <div className="sully-chat-status flex items-center gap-2 flex-wrap">
                     {onlineStatusNode}
                     {lastTokenUsage && (
-                        <div className={`text-[9px] px-1.5 py-0.5 rounded-md font-mono border ${isDarkHeader ? 'bg-slate-800 text-slate-300 border-white/10' : isPixelHeader ? 'bg-[#fff7ed] text-[#8f674a] border-[#8f674a]/20' : 'bg-slate-100 text-slate-400 border-slate-200'}`} title={tokenBreakdown ? `prompt: ${tokenBreakdown.prompt} | completion: ${tokenBreakdown.completion} | msgs: ${tokenBreakdown.msgCount} | pass: ${tokenBreakdown.pass}` : ''}>
+                        <div className={`sully-chat-token text-[9px] px-1.5 py-0.5 rounded-md font-mono border ${isDarkHeader ? 'bg-slate-800 text-slate-300 border-white/10' : isPixelHeader ? 'bg-[#fff7ed] text-[#8f674a] border-[#8f674a]/20' : 'bg-slate-100 text-slate-400 border-slate-200'}`} title={tokenBreakdown ? `prompt: ${tokenBreakdown.prompt} | completion: ${tokenBreakdown.completion} | msgs: ${tokenBreakdown.msgCount} | pass: ${tokenBreakdown.pass}` : ''}>
                             {lastTokenUsage}
                         </div>
                     )}
@@ -352,15 +368,29 @@ const ChatHeaderShell: React.FC<ChatHeaderShellProps> = ({
                         </div>
                     )}
                 </div>
-                <div className="mt-1 h-[18px] w-full">
-                    {renderBuffRow(false)}
-                </div>
+                {buffs.length > 0 && (
+                    <div className="mt-1 w-full">
+                        {renderBuffRow(false)}
+                    </div>
+                )}
             </div>
         </>
     );
 
     return (
-        <div className={`${headerDensityClass} flex ${useCenteredLayout ? 'items-center' : 'items-end'} shrink-0 z-30 sticky top-0 relative ${headerToneClass}`} style={headerSafeStyle}>
+        <div className="shrink-0 z-30 sticky top-0">
+        {/* safe-top spacer：透明 + backdrop-blur 跟 iOS status bar 一致自适应容器色，刘海下不再铺白带 */}
+        <div className="bg-transparent backdrop-blur-xl" style={{ height: 'var(--safe-top)' }} />
+        {/* header 主体：sully-chat-header 钩子 + 内容垂直居中（items-center）；safe-top 已由上面 spacer 让位 */}
+        <div className={`sully-chat-header ${headerDensityClass} flex items-center relative ${headerToneClass}`} style={headerSafeStyle}>
+            {/* 动森彩蛋：顶栏右下角纯色松树剪影（z-[-1] 在内容之下，不挡按钮）。塞在 header 主体内而非外层 spacer，否则会飘到刘海上 */}
+            {acnh && !selectionMode && (
+                <svg viewBox="0 0 140 46" className="absolute right-2 bottom-[5px] h-9 w-auto pointer-events-none" style={{ zIndex: -1, opacity: 0.9 }} fill="#76b48f" aria-hidden>
+                    <rect x="98" y="40" width="4" height="6" /><path d="M84 41 L116 41 L100 24Z" /><path d="M88 32 L112 32 L100 18Z" /><path d="M91 24 L109 24 L100 10Z" />
+                    <rect x="72" y="40" width="4" height="6" /><path d="M62 41 L86 41 L74 27Z" /><path d="M65 33 L83 33 L74 21Z" />
+                    <rect x="122" y="41" width="3" height="5" /><path d="M114 42 L134 42 L124 30Z" /><path d="M117 35 L131 35 L124 24Z" />
+                </svg>
+            )}
             {selectionMode ? (
                 <div className="flex items-center justify-between w-full">
                     <button onClick={onCancelSelection} className={`text-sm font-bold px-2 py-1 ${secondaryTextClass}`}>取消</button>
@@ -369,7 +399,7 @@ const ChatHeaderShell: React.FC<ChatHeaderShellProps> = ({
                 </div>
             ) : useCenteredLayout ? (
                 <div className="relative w-full min-h-[56px] flex items-end justify-center">
-                    <button onClick={onClose} className={`absolute left-0 bottom-2 p-2 ${iconButtonClass}`}>
+                    <button onClick={onClose} className={`sully-chat-back absolute left-0 bottom-2 p-2 ${iconButtonClass}`}>
                         <CaretLeft className="w-5 h-5" weight="bold" />
                     </button>
 
@@ -382,13 +412,13 @@ const ChatHeaderShell: React.FC<ChatHeaderShellProps> = ({
                         {renderCenteredInfo()}
                     </div>
 
-                    <button onClick={onTriggerAI} className={`absolute right-0 bottom-2 p-2 ${actionButtonClass}`} title="触发 AI">
+                    <button onClick={onTriggerAI} className={`sully-chat-trigger absolute right-0 bottom-2 p-2 ${actionButtonClass}`} title="触发 AI">
                         <Lightning className="w-5 h-5" weight="bold" />
                     </button>
                 </div>
             ) : (
                 <div className="flex items-center gap-3 w-full">
-                    <button onClick={onClose} className={`p-2 -ml-2 ${iconButtonClass}`}>
+                    <button onClick={onClose} className={`sully-chat-back p-2 -ml-2 ${iconButtonClass}`}>
                         <CaretLeft className="w-5 h-5" weight="bold" />
                     </button>
 
@@ -396,7 +426,7 @@ const ChatHeaderShell: React.FC<ChatHeaderShellProps> = ({
                         {renderStandardInfo()}
                     </div>
 
-                    <button onClick={onTriggerAI} className={`p-2 ml-auto ${actionButtonClass}`} title="触发 AI">
+                    <button onClick={onTriggerAI} className={`sully-chat-trigger p-2 ml-auto ${actionButtonClass}`} title="触发 AI">
                         <Lightning className="w-5 h-5" weight="bold" />
                     </button>
                 </div>
@@ -418,7 +448,7 @@ const ChatHeaderShell: React.FC<ChatHeaderShellProps> = ({
                                     onMouseUp={handleLongPressEnd}
                                     onMouseLeave={handleLongPressEnd}
                                     className="text-[10px] px-2 py-1 rounded-lg font-bold border cursor-pointer transition-colors select-none"
-                                    style={{ color: buff.color || '#db2777', borderColor: `${buff.color || '#db2777'}40`, background: `${buff.color || '#db2777'}10` }}
+                                    style={buffChipStyle(buff)}
                                 >
                                     {buff.emoji ? `${buff.emoji} ` : ''}
                                     {buff.label}
@@ -486,6 +516,7 @@ const ChatHeaderShell: React.FC<ChatHeaderShellProps> = ({
                 </div>,
                 document.body,
             )}
+        </div>
         </div>
     );
 };

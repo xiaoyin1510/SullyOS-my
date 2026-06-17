@@ -1739,7 +1739,7 @@ const GuidebookApp: React.FC = () => {
 
             {/* Option Edit Overlay */}
             {editingOptIdx !== null && (
-                <div className="fixed inset-0 z-50 flex items-end justify-center p-3 pb-4">
+                <div className="fixed inset-0 z-50 flex items-end justify-center p-3 pb-4" style={{ paddingBottom: `calc(1rem + var(--safe-bottom))` }}>
                     <div className="absolute inset-0 bg-black/40 backdrop-blur-sm" onClick={() => setEditingOptIdx(null)} />
                     <div className="relative w-full max-w-md rounded-3xl overflow-hidden shadow-2xl max-h-[85vh] overflow-y-auto" style={{ background: 'linear-gradient(160deg, #f5f0ee 0%, #ece6e9 100%)', border: '1px solid rgba(200,185,190,0.3)' }}>
                         <div className="px-5 pt-5 pb-3" style={{ borderBottom: '1px solid rgba(200,185,190,0.15)' }}>
@@ -1800,7 +1800,7 @@ const GuidebookApp: React.FC = () => {
 
             {/* Scenario Edit Overlay */}
             {editingScenario && (
-                <div className="fixed inset-0 z-50 flex items-end justify-center p-3 pb-4">
+                <div className="fixed inset-0 z-50 flex items-end justify-center p-3 pb-4" style={{ paddingBottom: `calc(1rem + var(--safe-bottom))` }}>
                     <div className="absolute inset-0 bg-black/40 backdrop-blur-sm" onClick={() => setEditingScenario(false)} />
                     <div className="relative w-full max-w-md rounded-3xl overflow-hidden shadow-2xl max-h-[85vh] overflow-y-auto" style={{ background: 'linear-gradient(160deg, #f5f0ee 0%, #ece6e9 100%)', border: '1px solid rgba(200,185,190,0.3)' }}>
                         <div className="px-5 pt-5 pb-3" style={{ borderBottom: '1px solid rgba(200,185,190,0.15)' }}>
@@ -1858,7 +1858,7 @@ const GuidebookApp: React.FC = () => {
 
             {/* Round Context Menu */}
             {contextMenuRound !== null && (
-                <div className="fixed inset-0 z-40 flex items-end justify-center p-4 pb-8">
+                <div className="fixed inset-0 z-40 flex items-end justify-center p-4 pb-8" style={{ paddingBottom: `calc(2rem + var(--safe-bottom))` }}>
                     <div className="absolute inset-0 bg-black/20 backdrop-blur-sm" onClick={() => setContextMenuRound(null)} />
                     <Card className="relative w-full max-w-sm overflow-hidden">
                         <div className="text-center text-xs py-2" style={{ color: '#9b8a8e', borderBottom: '1px solid rgba(200,185,190,0.2)' }}>

@@ -49,6 +49,18 @@ import {
     runXhsDetail,
 } from './agenticTools';
 
+
+function splitMultiItemName(name: string, totalAmount: number): { name: string; price: number }[] {
+    const source = String(name || '').trim();
+    if (!source) return [];
+    const separators = /[、,，+&及和]/g;
+    if (!separators.test(source)) return [{ name: source, price: totalAmount }];
+    const items = source.split(separators).map(s => s.trim()).filter(Boolean);
+    if (items.length <= 1) return [{ name: source, price: totalAmount }];
+    const pricePerItem = Math.round(totalAmount / items.length * 100) / 100;
+    return items.map(itemName => ({ name: itemName, price: pricePerItem }));
+}
+
 type NuomiCommerceAction = {
     kind?: 'char_purchase_to_user' | 'char_delivery_to_user' | 'delivery_payment_response' | 'waimai_response';
     type?: string;
@@ -67,7 +79,22 @@ function extractNuomiCommerceActions(text: string): { cleanText: string; actions
     const cleanText = String(text || '').replace(/\[\[NUOMI_COMMERCE:\s*([\s\S]*?)\s*\]\]/g, (_full, raw) => {
         try {
             const parsed = JSON.parse(String(raw).trim());
-            if (parsed && typeof parsed === 'object') actions.push(parsed);
+            if (parsed && typeof parsed === 'object') {
+                const name = String(parsed.name || parsed.productInfo || parsed.itemName || '').trim();
+                const total = Number(parsed.amount ?? parsed.price ?? 0);
+                if (name && total > 0) {
+                    const splitItems = splitMultiItemName(name, total);
+                    if (splitItems.length > 1) {
+                        splitItems.forEach(item => {
+                            actions.push({ ...parsed, name: item.name, amount: item.price, price: item.price });
+                        });
+                    } else {
+                        actions.push(parsed);
+                    }
+                } else {
+                    actions.push(parsed);
+                }
+            }
         } catch (e) {
             console.warn('🛒 [NuomiCommerce] 主动卡片标签解析失败:', raw, e);
         }
@@ -76,12 +103,11 @@ function extractNuomiCommerceActions(text: string): { cleanText: string; actions
     return { cleanText, actions };
 }
 
-
-function getCommerceCardFromMessage(message: any): CommerceCardPayload | undefined {
-    return message?.metadata?.commerceCard as CommerceCardPayload | undefined;
+function getCommerceCardFromMessage(message: any): any | undefined {
+    return message?.metadata?.commerceCard as any | undefined;
 }
 
-function findLatestPendingDeliveryRequest(messages: Message[]): CommerceCardPayload | undefined {
+function findLatestPendingDeliveryRequest(messages: any[]): any | undefined {
     return [...(messages || [])]
         .reverse()
         .map(getCommerceCardFromMessage)
@@ -91,36 +117,30 @@ function findLatestPendingDeliveryRequest(messages: Message[]): CommerceCardPayl
 function detectDeliveryPaymentDecision(text: string): 'paid' | 'rejected' | undefined {
     const source = String(text || '').replace(/\s+/g, ' ').trim();
     if (!source) return undefined;
-    if (/(拒绝支付|拒绝付款|不支付|不付款|不想支付|不想付款|不付了|不付|别付|算了|没钱|暂不支付|暂不付款|rejected|declined|decline|refuse|no pay)/i.test(source)) {
+    if (source.indexOf('拒绝') >= 0 || source.indexOf('不付') >= 0 || source.indexOf('算了') >= 0) {
         return 'rejected';
     }
-    if (/(已完成支付|完成支付|已支付|已付款|付过了|付了|我付|付款|支付|转账|买单|请客|paid|transfer)/i.test(source)) {
+    if (source.indexOf('付了') >= 0 || source.indexOf('支付') >= 0 || source.indexOf('付款') >= 0 || source.indexOf('买单') >= 0) {
         return 'paid';
     }
     return undefined;
 }
 
 function stripDeliveryPaymentNoise(text: string): string {
-    return String(text || '')
-        .replace(/\[系统[:：]\s*[^\]]*?(?:转账|支付|付款)[^\]]*?\]/g, '')
-        .replace(/^.*?(?:已完成支付|完成支付|已支付|已付款).*$/gim, '')
-        .replace(/^\s*[-•]\s*[^\n]*(?:数量|单价|小计|合计)[^\n]*$/gim, '')
-        .replace(/^\s*合计\s*[:：]?\s*¥?\d+(?:\.\d+)?\s*$/gim, '')
-        .replace(/\n{3,}/g, '\n\n')
-        .trim();
+    return String(text || '').trim();
 }
 
 function createDeliveryPaymentResultCard(
-    pending: CommerceCardPayload | undefined,
+    pending: any | undefined,
     paid: boolean,
     charName: string,
     userName: string,
     note?: string,
     fallbackName?: string,
     fallbackAmount?: number,
-): CommerceCardPayload {
+): any {
     const fallbackTotal = Number.isFinite(fallbackAmount || 0) && (fallbackAmount || 0) > 0 ? Number(fallbackAmount) : 0;
-    const fallbackItems: CommerceCardItem[] = [{
+    const fallbackItems: any[] = [{
         name: fallbackName || '外卖代付请求',
         qty: 1,
         price: fallbackTotal,
@@ -151,8 +171,8 @@ function formatCommerceAmount(value: number) {
     return Number(value || 0).toFixed(2).replace(/\.00$/, '');
 }
 
-function commerceCardToContent(card: CommerceCardPayload) {
-    const lines = card.items.map((item) => {
+function commerceCardToContent(card: any) {
+    const lines = card.items.map((item: any) => {
         const detail = [
             `${item.name}${item.variationName ? `（${item.variationName}）` : ''}`,
             `数量${item.qty}`,
@@ -162,10 +182,9 @@ function commerceCardToContent(card: CommerceCardPayload) {
             item.note ? `备注：${item.note}` : '',
         ].filter(Boolean).join('，');
         return `- ${detail}`;
-    }).join('\n');
-    return `${card.title}\n${lines}\n合计：¥${formatCommerceAmount(card.total || 0)}${card.note ? `\n备注：${card.note}` : ''}`;
+    }).join(String.fromCharCode(10));
+    return `${card.title}${String.fromCharCode(10)}${lines}${String.fromCharCode(10)}合计：¥${formatCommerceAmount(card.total || 0)}${card.note ? `${String.fromCharCode(10)}备注：${card.note}` : ''}`;
 }
-
 
 // ─── 模块内辅助 ──────────────────────────────────────────────────────────────
 
@@ -537,9 +556,15 @@ export async function applyAssistantPostProcessing(
     const QUOTE_RE_DOUBLE = /\[\[(?:QU[OA]TE|引用)[：:]\s*([\s\S]*?)\]\]/;
     const QUOTE_RE_SINGLE = /\[(?:QU[OA]TE|引用)[：:]\s*([^\]]*)\]/;
     const REPLY_RE_CN = /\[回复\s*[""“]([^""”]*?)[""”](?:\.{0,3})\]\s*[：:]?\s*/;
+    // 历史里引用消息被渲染成 [xx引用了xx说的「…」，并回复了 ↓]（chatPrompts.buildMessageHistory），
+    // 模型会模仿这个渲染格式而不是规范的 [[QUOTE:]] —— 把它也认作合法引用，否则既丢引用
+    // 又把整段方括号原样漏进气泡。「」是该渲染格式的硬锚点，配合"引用了"双锚降低误报。
+    // 引用摘要被截断成单行，「」内用 [^」\n]*? 限制在同一行：缺闭合 」 时不会跨行吞掉正文段落。
+    const QUOTE_RE_NL = /\[[^\[\]\n「」]{0,24}引用了[^\[\]\n「」]{0,24}「([^」\n]*?)」[^\[\]\n]{0,24}\]\s*/;
     const QUOTE_CLEAN_DOUBLE = /\[\[(?:QU[OA]TE|引用)[：:][\s\S]*?\]\]/g;
     const QUOTE_CLEAN_SINGLE = /\[(?:QU[OA]TE|引用)[：:][^\]]*\]/g;
     const REPLY_CLEAN_CN = /\[回复\s*[""“][^""”]*?[""”](?:\.{0,3})\]\s*[：:]?\s*/g;
+    const QUOTE_CLEAN_NL = /\[[^\[\]\n「」]{0,24}引用了[^\[\]\n「」]{0,24}「[^」\n]*?」[^\[\]\n]{0,24}\]\s*/g;
 
     // 抽取思考链 (showThinkingChain 开启时): reasoning_content + 内联 <think> 块。
     const extractThinkingChain = (dataObj: any, reasoningOverride?: string): string | null => {
@@ -586,7 +611,8 @@ export async function applyAssistantPostProcessing(
             // 不能直接剥标签——那样会把原文+译文拼成一串(如「你好Hello」)导致 includes 永远匹配不上。
             // 这里把两边内容各自当候选逐个匹配；没有成对标签时再退化成「剥掉零散标签」的兜底候选。
             const candidates: string[] = [];
-            const pushCand = (s?: string) => { const t = (s || '').trim(); if (t && !candidates.includes(t)) candidates.push(t); };
+            // 历史渲染的引用摘要超过 60 字会带截断省略号，剥掉再匹配（不剥则 includes 永远失败）。
+            const pushCand = (s?: string) => { const t = (s || '').trim().replace(/(?:[…⋯]+|\.{3,})$/, '').trim(); if (t && !candidates.includes(t)) candidates.push(t); };
             pushCand(raw.match(/<原文>([\s\S]*?)<\/原文>/)?.[1]);
             pushCand(raw.match(/<译文>([\s\S]*?)<\/译文>/)?.[1]);
             pushCand(raw.replace(/<\/?翻译>|<\/?原文>|<\/?译文>/g, '').replace(/%%BILINGUAL%%/gi, ''));
@@ -607,7 +633,7 @@ export async function applyAssistantPostProcessing(
 
         // Quote/Reply 目标 (双语路径用)
         let aiReplyTarget: { id: number, content: string, name: string } | undefined;
-        const firstQuoteMatch = rawContent.match(QUOTE_RE_DOUBLE) || rawContent.match(QUOTE_RE_SINGLE) || rawContent.match(REPLY_RE_CN);
+        const firstQuoteMatch = rawContent.match(QUOTE_RE_DOUBLE) || rawContent.match(QUOTE_RE_SINGLE) || rawContent.match(REPLY_RE_CN) || rawContent.match(QUOTE_RE_NL);
         if (firstQuoteMatch) aiReplyTarget = resolveQuoteTarget(firstQuoteMatch[1]);
 
         let content = ChatParser.sanitize(rawContent, { keepCitations: true });
@@ -691,6 +717,10 @@ export async function applyAssistantPostProcessing(
         } else {
             // ─── normal path (splitResponse → chunkText → per-chunk save) ───
             const parts = ChatParser.splitResponse(content);
+            // 模型常把 [[QUOTE:]] 单独写一行 (后面紧跟换行或 [[SEND_EMOJI:]]), chunkText/splitResponse
+            // 会把它拆成一个"只有标签没有正文"的 chunk — 剥标签后 hasDisplayContent 为 false 不落库,
+            // 解析出的引用目标若不暂存就会随之丢失。挂到下一条真正落库的文字气泡上。
+            let pendingReplyTarget: { id: number, content: string, name: string } | undefined;
             for (let partIndex = 0; partIndex < parts.length; partIndex++) {
                 const part = parts[partIndex];
 
@@ -715,22 +745,25 @@ export async function applyAssistantPostProcessing(
                         await new Promise(r => setTimeout(r, delay));
 
                         let chunkReplyTarget: { id: number, content: string, name: string } | undefined;
-                        const chunkQuoteMatch = chunk.match(QUOTE_RE_DOUBLE) || chunk.match(QUOTE_RE_SINGLE) || chunk.match(REPLY_RE_CN);
+                        const chunkQuoteMatch = chunk.match(QUOTE_RE_DOUBLE) || chunk.match(QUOTE_RE_SINGLE) || chunk.match(REPLY_RE_CN) || chunk.match(QUOTE_RE_NL);
                         if (chunkQuoteMatch) {
                             chunkReplyTarget = resolveQuoteTarget(chunkQuoteMatch[1]);
-                            chunk = chunk.replace(QUOTE_CLEAN_DOUBLE, '').replace(QUOTE_CLEAN_SINGLE, '').replace(REPLY_CLEAN_CN, '').trim();
+                            chunk = chunk.replace(QUOTE_CLEAN_DOUBLE, '').replace(QUOTE_CLEAN_SINGLE, '').replace(REPLY_CLEAN_CN, '').replace(QUOTE_CLEAN_NL, '').trim();
                         }
 
-                        const replyData = chunkReplyTarget;
+                        const replyData = chunkReplyTarget ?? pendingReplyTarget;
 
+                        let chunkSaved = false;
                         if (ChatParser.hasDisplayContent(chunk)) {
                             const cleanChunk = ChatParser.sanitize(chunk);
                             if (cleanChunk) {
                                 await DB.saveMessage({ charId: char.id, role: 'assistant', type: 'text', content: cleanChunk, replyTo: replyData, metadata: takeMeta(mcdInheritMeta) } as any);
                                 setMessages(await DB.getRecentMessagesByCharId(char.id, 200));
                                 globalMsgIndex++;
+                                chunkSaved = true;
                             }
                         }
+                        pendingReplyTarget = chunkSaved ? undefined : replyData;
                     }
                 }
             }
@@ -1871,7 +1904,13 @@ export async function applyAssistantPostProcessing(
                 : { cleanText: aiContent, actions: [] as NuomiCommerceAction[] };
             aiContent = commerceParsed.cleanText;
             if (commerceFeatureActive && commerceParsed.actions.length > 0) {
-                for (const action of commerceParsed.actions.slice(0, 3)) {
+                // ✅ 优化：把多个商品合并到同一个卡片里，和 User 给 Char 买的格式完全一致
+                const giftItems: CommerceCardItem[] = [];
+                let giftKind: CommerceCardKind = 'char_purchase_to_user';
+                let giftNote: string | undefined = undefined;
+                let giftTotal = 0;
+
+                for (const action of commerceParsed.actions.slice(0, 10)) {
                     const actionKind = String(action.kind || action.type || '').trim();
                     const name = String(action.name || action.productInfo || action.itemName || '').trim().slice(0, 60);
                     const total = Number(action.amount ?? action.price ?? 0);
@@ -1903,30 +1942,39 @@ export async function applyAssistantPostProcessing(
                         continue;
                     }
 
+                    // 收集主动购买/外卖的商品，合并到同一个卡片
                     const kind: CommerceCardKind = actionKind === 'char_delivery_to_user' ? 'char_delivery_to_user' : 'char_purchase_to_user';
-                    const mode = kind === 'char_delivery_to_user' ? 'delivery' : 'shopping';
+                    giftKind = kind;
+                    if (note) giftNote = note;
                     if (!name || !Number.isFinite(total) || total <= 0) continue;
-                    const item: CommerceCardItem = {
+                    
+                    giftItems.push({
                         name,
                         qty: 1,
                         price: total,
                         subtotal: total,
-                        description: kind === 'char_purchase_to_user' ? '角色主动购买的物品，不要求来自商品库。' : undefined,
+                        description: String(action.description || action.note || '').trim() || undefined,
                         emoji: kind === 'char_delivery_to_user' ? '🥡' : '🎁',
-                    };
+                    });
+                    giftTotal += total;
+                }
+
+                // ✅ 所有商品合并成一个卡片，和 User 给 Char 买的格式完全一样
+                if (giftItems.length > 0) {
+                    const mode = giftKind === 'char_delivery_to_user' ? 'delivery' : 'shopping';
                     const card: CommerceCardPayload = {
                         version: 2,
                         id: `commerce-auto-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
-                        kind,
-                        title: kind === 'char_delivery_to_user' ? `${char.name}给${userProfile.name || '我'}点了外卖` : `${char.name}给${userProfile.name || '我'}买了东西`,
+                        kind: giftKind,
+                        title: giftKind === 'char_delivery_to_user' ? `${char.name}给${userProfile.name || '我'}点了外卖` : `${char.name}给${userProfile.name || '我'}买了东西`,
                         mode,
                         actorName: char.name,
                         targetName: userProfile.name || '我',
                         charName: char.name,
                         userName: userProfile.name || '我',
-                        items: [item],
-                        total,
-                        note,
+                        items: giftItems,
+                        total: giftTotal,
+                        note: giftNote,
                         status: 'gifted',
                         createdAt: Date.now(),
                     };
@@ -1937,8 +1985,8 @@ export async function applyAssistantPostProcessing(
                         content: commerceCardToContent(card),
                         metadata: { source: 'nuomi-commerce-auto', commerceCard: card },
                     } as any);
+                    addToast('已弹出TA主动购物/外卖卡片', 'success');
                 }
-                addToast('已弹出TA主动购物/外卖卡片', 'success');
             }
 
             // 如果模型没有按要求输出内部标签，而是自然写了“已付款/转账/拒绝支付”，也自动转成支付结果卡片。

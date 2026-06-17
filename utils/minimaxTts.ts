@@ -9,44 +9,40 @@ import { hashTtsParams, getCachedTts, saveCachedTts } from './ttsCache';
 const DEFAULT_MODEL = 'speech-2.8-hd';
 
 // MiniMax 支持的语气标签 — 这些在 TTS 中会被正确演绎，必须保留
-const VALID_INTERJECTION_TAGS = new Set([
+export const VALID_INTERJECTION_TAGS = new Set([
   'chuckle', 'laughs', 'sighs', 'coughs', 'clear-throat', 'groans',
   'breath', 'pant', 'inhale', 'exhale', 'gasps', 'sniffs', 'snorts',
   'lip-smacking', 'humming', 'hissing', 'emm',
 ]);
 
-// 中文舞台指示 → MiniMax 语气标签映射（与 CallApp 一致的子集，用于 Chat/Date）
-const CN_CUE_MAP: Record<string, string> = {
-  '轻笑': '(chuckle)', '笑': '(laughs)', '大笑': '(laughs)',
-  '叹气': '(sighs)', '叹息': '(sighs)',
-  '咳嗽': '(coughs)', '咳': '(coughs)',
-  '呻吟': '(groans)', '哼': '(groans)',
-  '换气': '(breath)', '呼吸': '(breath)',
-  '喘气': '(pant)', '喘': '(pant)',
-  '吸气': '(inhale)', '呼气': '(exhale)',
-  '倒吸气': '(gasps)', '嘶': '(hissing)',
-  '嗯': '(emm)', '唔': '(emm)',
-  '咂嘴': '(lip-smacking)', '哼唱': '(humming)',
-  '喷鼻息': '(snorts)', '吸鼻子': '(sniffs)',
-};
+// MiniMax voice_setting.emotion 合法取值（整条一个值）。其余/未知一律丢弃不传。
+export const VALID_EMOTIONS = new Set([
+  'happy', 'sad', 'angry', 'fearful', 'disgusted', 'surprised', 'calm', 'fluent',
+]);
 
-/** Strip parenthetical content intelligently: map known cues → interjection tags, delete unknown */
+// [happy]/【angry】… 这类情绪标签是给系统读取/设定 emotion 用的，绝不能被朗读或显示出来。
+const EMOTION_TAG_RE = /[\[【]\s*(?:happy|sad|angry|fearful|disgusted|surprised|calm|fluent)\s*[\]】]/gi;
+/** 移除文本里所有 [emotion] / 【emotion】 标记（任意位置），避免被朗读或显示。 */
+export const stripEmotionTags = (text: string): string => (text || '').replace(EMOTION_TAG_RE, '');
+
+// 设计：不再做「中文舞台指示 → 语气标签」的猜测式映射（体验差、不可预测、有损）。
+// 改为「教 LLM 直接写官方 sound tag」+「客户端只做白名单消毒」。
+// 因此这里只保留一个合法标签白名单（上方 VALID_INTERJECTION_TAGS），不保留任何中→英映射表。
+
+/**
+ * 消毒括号内容（不做任何映射，只做白名单）：
+ * - 中文舞台指示（……）一律删除，绝不读出来；
+ * - 西文括号仅保留合法 sound tag（如 (laughs)），其余删除。
+ * LLM 现在被要求直接写官方英文 sound tag，所以这里不再翻译中文提示词。
+ */
 const stripParensPreservingTags = (text: string): string => {
-  return text
-    // 中文括号：映射 or 删除
-    .replace(/（([^）]{1,48})）/g, (_m, cue: string) => {
-      const t = cue.trim();
-      if (CN_CUE_MAP[t]) return CN_CUE_MAP[t];
-      for (const [key, tag] of Object.entries(CN_CUE_MAP)) {
-        if (t.includes(key)) return tag;
-      }
-      return '';
-    })
-    // 西文括号：保留合法语气标签，删除其他
+  return stripEmotionTags(text)
+    // 中文括号舞台指示：一律删除
+    .replace(/（[^）]{0,48}）/g, '')
+    // 西文括号：仅保留白名单 sound tag，其余删除
     .replace(/\(([^)]{1,80})\)/g, (_m, inner: string) => {
       const tag = inner.trim().toLowerCase();
-      if (VALID_INTERJECTION_TAGS.has(tag)) return `(${tag})`;
-      return '';
+      return VALID_INTERJECTION_TAGS.has(tag) ? `(${tag})` : '';
     });
 };
 
@@ -57,8 +53,8 @@ const stripParensPreservingTags = (text: string): string => {
  * Known interjection tags like (chuckle) / (sighs) are preserved.
  */
 export const cleanTextForTts = (raw: string): string => {
-  // 1. If <语音> tag exists, extract and use that content only
-  const voiceTagMatch = raw.match(/<[语語]音>([\s\S]*?)<\/[语語]音>/);
+  // 1. If <语音> tag exists (with or without emotion attribute), extract & use its content only
+  const voiceTagMatch = raw.match(/<[语語]音[^>]*>([\s\S]*?)<\/[语語]音>/);
   if (voiceTagMatch) {
     return stripParensPreservingTags(voiceTagMatch[1]).replace(/\s+/g, ' ').trim();
   }
@@ -68,13 +64,44 @@ export const cleanTextForTts = (raw: string): string => {
   text = text.replace(/\[\[.*?\]\]/g, '');
   // 3. Strip %%BILINGUAL%% and everything after
   text = text.replace(/%%BILINGUAL%%[\s\S]*/i, '');
-  // 4. Map/strip parenthetical cues (preserving valid interjection tags)
+  // 4. Strip parenthetical cues (preserving valid interjection tags only)
   text = stripParensPreservingTags(text);
   // 5. Strip <语音>...</语音> tags if they somehow remain
-  text = text.replace(/<[语語]音>[\s\S]*?<\/[语語]音>/g, '');
+  text = text.replace(/<[语語]音[^>]*>[\s\S]*?<\/[语語]音>/g, '');
   // 6. Collapse whitespace
   text = text.replace(/\s+/g, ' ').trim();
   return text;
+};
+
+export interface ParsedVoiceOutput {
+  /** Text OUTSIDE the <语音> tag — what shows in the chat bubble. */
+  display: string;
+  /** TTS-ready spoken text (sanitized: only whitelisted sound tags kept). */
+  speech: string;
+  /** Validated MiniMax emotion from the tag's emotion="…" attribute, or undefined. */
+  emotion?: string;
+  /** Whether a <语音> tag was present at all. */
+  hasVoiceTag: boolean;
+}
+
+// <语音 emotion="happy">…</语音> — emotion attribute optional, single/double/no quotes tolerated.
+const VOICE_TAG_RE = /<[语語]音(?:\s+emotion\s*=\s*["']?([a-zA-Z]+)["']?)?\s*>([\s\S]*?)<\/[语語]音>/;
+
+/**
+ * Parse an assistant message into display text + spoken text + emotion.
+ * The single source of truth for the structured voice-output format that the
+ * LLM is taught to emit. Invalid emotions are dropped (returns undefined) so a
+ * malformed attribute can never reach the API.
+ */
+export const parseVoiceOutput = (raw: string): ParsedVoiceOutput => {
+  if (!raw) return { display: '', speech: '', hasVoiceTag: false };
+  const m = raw.match(VOICE_TAG_RE);
+  if (!m) return { display: raw.trim(), speech: '', hasVoiceTag: false };
+  const rawEmotion = (m[1] || '').trim().toLowerCase();
+  const emotion = VALID_EMOTIONS.has(rawEmotion) ? rawEmotion : undefined;
+  const speech = stripParensPreservingTags(m[2]).replace(/\s+/g, ' ').trim();
+  const display = raw.replace(/<[语語]音[^>]*>[\s\S]*?<\/[语語]音>/g, '').trim();
+  return { display, speech, emotion, hasVoiceTag: true };
 };
 
 /** 为 TTS 文本插入 MiniMax 原生停顿标签 <#秒数#>，让语音有自然停顿
@@ -88,25 +115,25 @@ export const cleanTextForTts = (raw: string): string => {
 export const insertSpeechBreaks = (text: string): string => {
   if (!text) return '';
   return text
-    // 最长停顿优先——省略号：欲言又止、沉默、犹豫
+    // 省略号：欲言又止 / 犹豫
     .replace(/[…]{2,}/g, '……<#0.45#>')          // 多个省略号连用，更长
     .replace(/[…]/g, '…<#0.35#>')               // 单个省略号
     .replace(/\.{3,}/g, '...<#0.35#>')           // 英文省略号
     // 破折号：话题转折、语气拉长
-    .replace(/——/g, '——<#0.18#>')
-    .replace(/--/g, '--<#0.18#>')
-    // 句末标点：正常句子结束
-    .replace(/([。])/g, '$1<#0.12#>')
-    .replace(/([！？!?])/g, '$1<#0.14#>')        // 感叹/疑问稍长一点点
-    // 句中标点：轻微换气
-    .replace(/([，,])/g, '$1<#0.06#>')
-    .replace(/([、；;：:])/g, '$1<#0.05#>')
+    .replace(/——/g, '——<#0.22#>')
+    .replace(/--/g, '--<#0.22#>')
+    // 句末标点：句子之间留出真实呼吸（别让角色一口气赶完）
+    .replace(/([。])/g, '$1<#0.22#>')
+    .replace(/([！？!?])/g, '$1<#0.26#>')        // 感叹/疑问停顿更明显
+    // 句中标点：换气
+    .replace(/([，,])/g, '$1<#0.10#>')
+    .replace(/([、；;：:])/g, '$1<#0.07#>')
     // 换行：段落间停顿
-    .replace(/\n/g, '\n<#0.25#>')
-    // 去重：相邻多个停顿标签只保留最长的那个
+    .replace(/\n/g, '\n<#0.30#>')
+    // 去重：相邻多个停顿标签只保留最长的那个（封顶 0.6s）
     .replace(/(<#[\d.]+#>[\s]*){2,}/g, (match) => {
       const times = [...match.matchAll(/<#([\d.]+)#>/g)].map(m => parseFloat(m[1]));
-      const maxTime = Math.min(Math.max(...times), 0.5);
+      const maxTime = Math.min(Math.max(...times), 0.6);
       return `<#${maxTime.toFixed(2)}#>`;
     })
     .trim();
@@ -154,15 +181,26 @@ export const buildTtsExtras = (vp: CharacterProfile['voiceProfile']) => {
   return extras;
 };
 
-/** Build voice_setting fields (speed, vol, pitch, emotion) with safe ranges */
-export const buildVoiceSettings = (vp: CharacterProfile['voiceProfile']) => ({
-  // Clamp speed to 0.75–1.4 for natural human feel (API allows 0.5–2)
-  speed: Math.max(0.75, Math.min(1.4, vp?.speed ?? 1)),
-  vol: Math.max(0.3, Math.min(2, vp?.vol ?? 1)),
-  // Clamp base pitch to ±8 semitones (API allows ±12) to avoid alien sound
-  pitch: Math.max(-8, Math.min(8, vp?.pitch ?? 0)),
-  ...(vp?.emotion ? { emotion: vp.emotion } : {}),
-});
+/**
+ * Build voice_setting fields (speed, vol, pitch, emotion) with safe ranges.
+ * `emotionOverride` (validated MiniMax emotion, e.g. from a <语音 emotion="…"> tag)
+ * wins over the character's static voiceProfile.emotion. Invalid values are ignored.
+ */
+export const buildVoiceSettings = (vp: CharacterProfile['voiceProfile'], emotionOverride?: string) => {
+  const emotion = (emotionOverride && VALID_EMOTIONS.has(emotionOverride))
+    ? emotionOverride
+    : (vp?.emotion || '');
+  return {
+    // Clamp speed to 0.75–1.4 for natural human feel (API allows 0.5–2)
+    speed: Math.max(0.75, Math.min(1.4, vp?.speed ?? 1)),
+    vol: Math.max(0.3, Math.min(2, vp?.vol ?? 1)),
+    // Clamp base pitch to ±8 semitones (API allows ±12) to avoid alien sound
+    pitch: Math.max(-8, Math.min(8, vp?.pitch ?? 0)),
+    // Normalize numbers/English so "2.8" etc. are read naturally
+    english_normalization: true,
+    ...(emotion ? { emotion } : {}),
+  };
+};
 
 /** Convert hex audio from MiniMax to a playable Blob */
 export const convertHexAudioToBlob = (hexAudio: string, mimeType = 'audio/mpeg'): Blob => {
@@ -205,7 +243,7 @@ export async function synthesizeSpeechDetailed(
   text: string,
   char: CharacterProfile,
   apiConfig: APIConfig,
-  options?: { languageBoost?: string; groupId?: string }
+  options?: { languageBoost?: string; groupId?: string; emotion?: string }
 ): Promise<TtsResult> {
   const apiKey = resolveMiniMaxApiKey(apiConfig);
   if (!apiKey) throw new Error('缺少 MiniMax API Key');
@@ -222,14 +260,14 @@ export async function synthesizeSpeechDetailed(
     text: processedText,
     voice_setting: {
       voice_id: vp?.voiceId || '',
-      ...buildVoiceSettings(vp),
+      ...buildVoiceSettings(vp, options?.emotion),
     },
     audio_setting: { format: 'mp3' },
     ...buildTtsExtras(vp),
   };
-  if (options?.languageBoost) {
-    payload.language_boost = options.languageBoost;
-  }
+  // Only set language_boost when an explicit voice language is chosen. Leaving it
+  // unset keeps Chinese prosody stable (auto-detect made the tone wobble per line).
+  if (options?.languageBoost) payload.language_boost = options.languageBoost;
 
   // Check the shared cache before hitting the network. Two call sites that
   // build the same payload get the same hash and reuse whichever one synthesized
@@ -304,7 +342,7 @@ export async function synthesizeSpeech(
   text: string,
   char: CharacterProfile,
   apiConfig: APIConfig,
-  options?: { languageBoost?: string; groupId?: string }
+  options?: { languageBoost?: string; groupId?: string; emotion?: string }
 ): Promise<string> {
   const { url } = await synthesizeSpeechDetailed(text, char, apiConfig, options);
   return url;

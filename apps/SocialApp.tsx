@@ -851,7 +851,7 @@ ${identityMap}
                     </div>
 
                     {/* Bottom Input Bar - Absolute to sit on top of scroll area at bottom */}
-                    <div className="absolute bottom-0 w-full pb-[env(safe-area-inset-bottom)] z-30 pointer-events-none">
+                    <div className="absolute bottom-0 w-full pb-[var(--safe-bottom,0px)] z-30 pointer-events-none">
                          <div className="pointer-events-auto h-16 bg-white/80 backdrop-blur-xl border-t border-white/40 px-4 flex items-center justify-between gap-4 shadow-[0_-4px_20px_rgba(0,0,0,0.03)]">
                             <div className="flex-1 bg-slate-100/50 rounded-full px-5 py-2.5 flex items-center gap-2 focus-within:bg-white focus-within:ring-1 focus-within:ring-slate-200 transition-all border border-transparent focus-within:border-slate-200">
                                 <input 

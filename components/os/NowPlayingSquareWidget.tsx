@@ -17,8 +17,9 @@ const formatTime = (sec: number) => {
 };
 
 const NowPlayingSquareWidget: React.FC<{ contentColor: string }> = ({ contentColor }) => {
-  const { openApp } = useOS();
+  const { openApp, theme } = useOS();
   const { current, playing, progress, duration, togglePlay, nextSong, prevSong } = useMusic();
+  const acnh = theme.skin === 'animalcrossing'; // 动森：奶油卡片 + 薄荷进度
 
   const pct = duration > 0 ? (progress / duration) * 100 : 0;
   const hasSong = !!current;
@@ -33,6 +34,64 @@ const NowPlayingSquareWidget: React.FC<{ contentColor: string }> = ({ contentCol
   const handlePlay = (e: React.MouseEvent) => { e.stopPropagation(); if (hasSong) togglePlay(); else openApp(AppID.Music); };
   const handleNext = (e: React.MouseEvent) => { e.stopPropagation(); if (hasSong) nextSong(); };
   const handlePrev = (e: React.MouseEvent) => { e.stopPropagation(); if (hasSong) prevSong(); };
+
+  // 动森彩蛋：黑胶唱机布局（全新设计，非原版均衡器条）
+  if (acnh) {
+    return (
+      <div
+        onClick={() => openApp(AppID.Music)}
+        className="relative w-full h-full rounded-[1.75rem] overflow-hidden cursor-pointer animate-fade-in transition-transform active:scale-[0.98] flex flex-col items-center justify-between p-3"
+        style={{ background: 'rgb(247,243,223)', border: '2px solid #e8e2d6', boxShadow: '0 6px 18px rgba(61,52,40,0.12)', color: '#725d42' }}
+      >
+        {/* 唱片 + 唱臂 */}
+        <div className="relative mt-0.5" style={{ width: '54%', aspectRatio: '1 / 1' }}>
+          <div className="absolute inset-0 rounded-full"
+            style={{
+              background: 'repeating-radial-gradient(circle at 50% 50%, #2b231d 0 2px, #3a2e26 2px 3.5px)',
+              boxShadow: 'inset 0 0 0 2px #1f1813, 0 4px 10px rgba(61,52,40,0.28)',
+              animation: playing ? 'spin 6s linear infinite' : 'none',
+            }}>
+            <div className="absolute inset-[34%] rounded-full overflow-hidden flex items-center justify-center"
+              style={{ background: '#F7CD67', boxShadow: '0 0 0 2px #e0b84a' }}>
+              {albumPic
+                ? <img src={albumPic} alt="" className="w-full h-full object-cover" />
+                : <span className="text-[11px] font-black text-[#7a5c1e]">♪</span>}
+            </div>
+            <div className="absolute left-1/2 top-1/2 w-1.5 h-1.5 -translate-x-1/2 -translate-y-1/2 rounded-full" style={{ background: '#1f1813' }} />
+          </div>
+          {/* 唱臂 */}
+          <div className="absolute -top-1 -right-1 w-3 h-3 rounded-full z-10" style={{ background: '#cdbfa0', boxShadow: '0 1px 2px rgba(61,52,40,0.3)' }} />
+          <div className="absolute top-0 right-0 w-[3px] rounded-full z-10 origin-top-right transition-transform duration-500"
+            style={{ height: '62%', background: '#b8a988', transform: playing ? 'rotate(22deg)' : 'rotate(42deg)', boxShadow: '0 1px 2px rgba(61,52,40,0.25)' }} />
+        </div>
+
+        {/* 曲名 */}
+        <div className="text-center min-w-0 w-full px-1">
+          <div className="text-[11px] font-bold truncate leading-tight">{title}</div>
+          <div className="text-[9px] truncate leading-tight" style={{ color: '#9f927d' }}>{artists}</div>
+        </div>
+
+        {/* 控件：圆形 AC 按钮 */}
+        <div className="flex items-center justify-center gap-3">
+          <button aria-label="Previous" onClick={handlePrev} onMouseDown={stopProp} disabled={!hasSong}
+            className="w-7 h-7 rounded-full flex items-center justify-center active:scale-90 transition disabled:opacity-30"
+            style={{ background: '#fff', border: '2px solid #e0d6c0', color: '#725d42' }}>
+            <SkipBack size={12} weight="fill" />
+          </button>
+          <button aria-label={playing ? 'Pause' : 'Play'} onClick={handlePlay} onMouseDown={stopProp}
+            className="w-9 h-9 rounded-full flex items-center justify-center active:scale-95 transition"
+            style={{ background: '#19c8b9', color: '#fff', boxShadow: '0 3px 0 0 #12a89b' }}>
+            {playing ? <Pause size={15} weight="fill" /> : <Play size={15} weight="fill" />}
+          </button>
+          <button aria-label="Next" onClick={handleNext} onMouseDown={stopProp} disabled={!hasSong}
+            className="w-7 h-7 rounded-full flex items-center justify-center active:scale-90 transition disabled:opacity-30"
+            style={{ background: '#fff', border: '2px solid #e0d6c0', color: '#725d42' }}>
+            <SkipForward size={12} weight="fill" />
+          </button>
+        </div>
+      </div>
+    );
+  }
 
   return (
     <div
@@ -123,12 +182,12 @@ const NowPlayingSquareWidget: React.FC<{ contentColor: string }> = ({ contentCol
         {/* 进度条 */}
         <div className="flex flex-col gap-0.5">
           <div className="h-[3px] w-full rounded-full overflow-hidden"
-            style={{ background: 'rgba(255,255,255,0.15)' }}>
+            style={{ background: acnh ? 'rgba(94,72,59,0.15)' : 'rgba(255,255,255,0.15)' }}>
             <div className="h-full rounded-full transition-[width] duration-150"
               style={{
                 width: `${pct}%`,
-                background: 'linear-gradient(90deg, #60a5fa, #c084fc)',
-                boxShadow: '0 0 6px rgba(192,132,252,0.55)',
+                background: acnh ? 'linear-gradient(90deg, #82D5BB, #6fba2c)' : 'linear-gradient(90deg, #60a5fa, #c084fc)',
+                boxShadow: acnh ? 'none' : '0 0 6px rgba(192,132,252,0.55)',
               }} />
           </div>
           <div className="flex justify-between text-[7.5px] uppercase font-medium opacity-50" style={{ letterSpacing: '0.15em' }}>

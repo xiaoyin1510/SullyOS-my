@@ -4,6 +4,7 @@ import { useOS, DEFAULT_WALLPAPER } from '../context/OSContext';
 import { OSTheme, DesktopDecoration, AppearancePreset, Toast } from '../types';
 import { INSTALLED_APPS, Icons } from '../constants';
 import { processImage } from '../utils/file';
+import { DB } from '../utils/db';
 import { Sparkle } from '@phosphor-icons/react';
 import { ChatAppearanceEditor as ModularChatAppearanceEditor } from '../components/appearance/ChatAppearanceEditor';
 import { Capacitor } from '@capacitor/core';
@@ -131,6 +132,72 @@ const CHAT_LAYOUT_COMBOS: { name: string; desc: string; config: Partial<OSTheme>
     { name: 'iMessage', desc: '大圆头像+宽松气泡', config: { chatAvatarShape: 'circle', chatAvatarSize: 'large', chatBubbleStyle: 'modern', chatMessageSpacing: 'spacious', chatHeaderStyle: 'minimal', chatInputStyle: 'rounded', chatShowTimestamp: 'always' } },
     { name: '简约模式', desc: '小头像+最简界面', config: { chatAvatarShape: 'circle', chatAvatarSize: 'small', chatBubbleStyle: 'flat', chatMessageSpacing: 'compact', chatHeaderStyle: 'minimal', chatInputStyle: 'flat', chatShowTimestamp: 'never' } },
 ];
+
+// --- 桌面整机风格（皮肤）---
+// 动森壁纸：NookPhone 同款奶油底（#F8F4E8），底部极淡草色透气。纯 CSS 渐变，让彩色图标平铺更跳。
+const ACNH_WALLPAPER = 'linear-gradient(180deg, #F8F4E8 0%, #F3EFDD 58%, #E6EECE 100%)';
+
+const DESKTOP_SKINS: { id: string; name: string; desc: string; swatch: string; config: Partial<OSTheme> }[] = [
+  {
+    id: 'animalcrossing',
+    name: '动森风格',
+    desc: 'NookPhone 彩色图标 · 草地天空 · 暖色界面',
+    swatch: 'linear-gradient(135deg,#BCE7F5 0%,#BBE38F 55%,#7CBA4C 100%)',
+    config: {
+      skin: 'animalcrossing',
+      hue: 95, saturation: 48, lightness: 56,
+      contentColor: '#725d42',
+      wallpaper: ACNH_WALLPAPER,
+      chatAvatarShape: 'rounded', chatAvatarSize: 'medium',
+      chatBubbleStyle: 'modern', chatMessageSpacing: 'spacious',
+      chatHeaderStyle: 'default', chatInputStyle: 'rounded',
+      chatChromeStyle: 'soft', chatBackgroundStyle: 'paper',
+      chatShowTimestamp: 'hover',
+    },
+  },
+  {
+    id: 'default',
+    name: '默认风格',
+    desc: '经典 SullyOS 玻璃拟物界面',
+    swatch: 'linear-gradient(135deg,#FFDEE9 0%,#B5FFFC 100%)',
+    config: {
+      skin: 'default',
+      hue: 245, saturation: 25, lightness: 65,
+      contentColor: '#ffffff',
+      wallpaper: DEFAULT_WALLPAPER,
+    },
+  },
+];
+
+// 动森叶子贴纸：切换动森皮肤时自动撒到桌面。用 acnh-leaf- 前缀标记，便于切回时单独清掉而不动用户自己的装饰。
+const ACNH_LEAF_PREFIX = 'acnh-leaf-';
+const acnhLeafSvg = (fill: string, vein: string) => `data:image/svg+xml,${encodeURIComponent(
+  `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100">`
+  + `<path d="M50 8 C78 20 88 50 78 82 C74 92 60 96 50 92 C40 96 26 92 22 82 C12 50 22 20 50 8Z" fill="${fill}"/>`
+  + `<path d="M50 14 L50 88" stroke="${vein}" stroke-width="3" fill="none" opacity="0.5"/>`
+  + `<path d="M50 35 Q66 32 74 42" stroke="${vein}" stroke-width="2" fill="none" opacity="0.4"/>`
+  + `<path d="M50 52 Q34 49 26 59" stroke="${vein}" stroke-width="2" fill="none" opacity="0.4"/></svg>`
+)}`;
+const ACNH_LEAF_VARIANTS = [
+  acnhLeafSvg('#7CBA4C', '#4d7a2a'),
+  acnhLeafSvg('#9ED25F', '#5c8a30'),
+  acnhLeafSvg('#5FAE6E', '#356b3f'),
+];
+const ACNH_LEAF_LAYOUT: { x: number; y: number; scale: number; rotation: number; opacity: number; flip?: boolean }[] = [
+  { x: 12, y: 14, scale: 0.8, rotation: -20, opacity: 0.9 },
+  { x: 86, y: 17, scale: 0.7, rotation: 30, opacity: 0.85, flip: true },
+  { x: 17, y: 80, scale: 0.9, rotation: 15, opacity: 0.9 },
+  { x: 88, y: 78, scale: 0.72, rotation: -25, opacity: 0.85 },
+  { x: 50, y: 91, scale: 0.6, rotation: 8, opacity: 0.8 },
+  { x: 82, y: 48, scale: 0.55, rotation: -40, opacity: 0.7, flip: true },
+];
+const buildAcnhLeaves = (): DesktopDecoration[] => ACNH_LEAF_LAYOUT.map((p, i) => ({
+  id: `${ACNH_LEAF_PREFIX}${i}`,
+  type: 'preset',
+  content: ACNH_LEAF_VARIANTS[i % ACNH_LEAF_VARIANTS.length],
+  x: p.x, y: p.y, scale: p.scale, rotation: p.rotation, opacity: p.opacity,
+  zIndex: 5 + i, flip: p.flip,
+}));
 
 const ChatAppearanceEditor: React.FC<{ theme: OSTheme; updateTheme: (u: Partial<OSTheme>) => void }> = ({ theme, updateTheme }) => {
     const avatarShape = theme.chatAvatarShape || 'circle';
@@ -559,7 +626,17 @@ const PresetManager: React.FC<PresetManagerProps> = ({ presets, onSave, onApply,
 };
 
 const Appearance: React.FC = () => {
-  const { theme, updateTheme, closeApp, setCustomIcon, customIcons, addToast, appearancePresets, saveAppearancePreset, applyAppearancePreset, deleteAppearancePreset, renameAppearancePreset, exportAppearancePreset, importAppearancePreset, resetAppearance } = useOS();
+  const { theme, updateTheme, closeApp, setCustomIcon, customIcons, addToast, appearancePresets, saveAppearancePreset, applyAppearancePreset, deleteAppearancePreset, renameAppearancePreset, exportAppearancePreset, importAppearancePreset, resetAppearance, characters, updateCharacter } = useOS();
+  // 一键还原全部「聊天白框自定义 CSS」：清掉全局 + 每个角色自带的。
+  // 兼作救援：单角色的坏 CSS 把聊天界面整崩、进不去该角色设置时，从这里一键全清即可恢复。
+  const resetAllChromeCss = () => {
+    let n = 0;
+    if (theme.chatChromeCustomCss) { updateTheme({ chatChromeCustomCss: '' }); n++; }
+    (characters || []).forEach((c: any) => {
+      if (c?.chromeCustomCss) { updateCharacter(c.id, { chromeCustomCss: '' } as any); n++; }
+    });
+    addToast(n ? `已还原 ${n} 处聊天白框美化` : '没有需要还原的白框美化', n ? 'success' : 'info');
+  };
   const [activeTab, setActiveTab] = useState<'theme' | 'icons' | 'presets' | 'chat'>('theme');
   const wallpaperInputRef = useRef<HTMLInputElement>(null);
   const [wallpaperUrl, setWallpaperUrl] = useState('');
@@ -738,6 +815,49 @@ const Appearance: React.FC = () => {
       addToast('网络字体已应用', 'success');
   };
 
+  // 切换桌面整机风格：动森模式自动撒叶子贴纸（保留用户已有装饰），切回默认时只清掉 acnh 叶子。
+  // 壁纸处理：进入动森前备份用户原壁纸（data URI 存 IndexedDB，渐变/URL 存 localStorage），
+  // 切回默认时还原，避免覆盖用户自己设的桌面壁纸。
+  const ACNH_WP_BACKUP_KEY = 'acnh_wallpaper_backup';
+  const applyDesktopSkin = async (skin: { id: string; name: string; config: Partial<OSTheme> }) => {
+      const goingAcnh = skin.id === 'animalcrossing';
+      const currentlyAcnh = (theme.skin || 'default') === 'animalcrossing';
+
+      let wallpaper: string;
+      if (goingAcnh) {
+          wallpaper = ACNH_WALLPAPER;
+          // 仅从「默认 → 动森」时备份一次，避免重复点动森把 AC 壁纸当成用户壁纸备份
+          if (!currentlyAcnh) {
+              const dbWp = await DB.getAsset('wallpaper'); // 用户若用 data URI 壁纸，真值在这
+              const cur = dbWp || theme.wallpaper || '';
+              if (cur && cur.startsWith('data:')) {
+                  await DB.saveAsset('wallpaper_user_backup', cur);
+                  localStorage.setItem(ACNH_WP_BACKUP_KEY, '__asset__');
+              } else {
+                  localStorage.setItem(ACNH_WP_BACKUP_KEY, cur);
+                  await DB.deleteAsset('wallpaper_user_backup');
+              }
+          }
+      } else {
+          // 切回默认：还原备份的用户壁纸
+          const marker = localStorage.getItem(ACNH_WP_BACKUP_KEY);
+          if (marker === '__asset__') {
+              wallpaper = (await DB.getAsset('wallpaper_user_backup')) || DEFAULT_WALLPAPER;
+          } else if (marker !== null) {
+              wallpaper = marker || DEFAULT_WALLPAPER; // 空字符串=用户原本就是默认
+          } else {
+              wallpaper = DEFAULT_WALLPAPER; // 没有备份记录（老用户首次切回）
+          }
+      }
+
+      const existing = (theme.desktopDecorations || []).filter(d => !d.id.startsWith(ACNH_LEAF_PREFIX));
+      const desktopDecorations = goingAcnh ? [...existing, ...buildAcnhLeaves()] : existing;
+      // skin.config 里写死的 wallpaper 不用，改用上面算出的（备份/还原后的）值
+      const { wallpaper: _ignored, ...restConfig } = skin.config;
+      updateTheme({ ...restConfig, wallpaper, desktopDecorations });
+      addToast(`已切换到「${skin.name}」`, 'success');
+  };
+
   const handleIconUpload = async (file: File) => {
       if (!selectedAppId) return;
       try {
@@ -772,6 +892,47 @@ const Appearance: React.FC = () => {
       <div className="flex-1 overflow-y-auto p-5 space-y-6 no-scrollbar">
         {activeTab === 'theme' ? (
             <>
+                <section className="bg-white rounded-3xl p-5 shadow-sm border border-slate-100">
+                    <h2 className="text-sm font-bold text-slate-400 uppercase tracking-widest mb-1">桌面风格</h2>
+                    <p className="text-[10px] text-slate-400 mb-4">一键切换整机主题：壁纸、配色、图标外观、聊天界面全部联动改变。</p>
+                    <div className="grid grid-cols-2 gap-3">
+                        {DESKTOP_SKINS.map(skin => {
+                            const active = (theme.skin || 'default') === skin.id;
+                            return (
+                                <button
+                                    key={skin.id}
+                                    onClick={() => applyDesktopSkin(skin)}
+                                    className={`relative text-left rounded-2xl p-3 border-2 transition-all active:scale-[0.98] ${active ? 'border-primary ring-2 ring-primary/20' : 'border-slate-200 hover:border-slate-300'}`}
+                                >
+                                    <div className="h-16 w-full rounded-xl mb-2 shadow-inner" style={{ background: skin.swatch }} />
+                                    <div className="text-xs font-bold text-slate-700 flex items-center gap-1">
+                                        {skin.name}
+                                        {active && <span className="text-[9px] font-bold text-primary">· 当前</span>}
+                                    </div>
+                                    <div className="text-[9px] text-slate-400 mt-0.5 leading-snug">{skin.desc}</div>
+                                </button>
+                            );
+                        })}
+                    </div>
+
+                    {/* 动森模式专属：聊天 App 是否联动 */}
+                    {(theme.skin || 'default') === 'animalcrossing' && (
+                        <div className="mt-4 flex items-center justify-between gap-3 rounded-2xl bg-slate-50 border border-slate-100 px-4 py-3">
+                            <div className="min-w-0">
+                                <div className="text-xs font-bold text-slate-700">聊天界面跟随动森</div>
+                                <div className="text-[10px] text-slate-400 mt-0.5 leading-snug">关掉后，聊天 App 保持原来的样式</div>
+                            </div>
+                            <button
+                                onClick={() => updateTheme({ acnhChatSync: theme.acnhChatSync === false ? true : false })}
+                                className={`relative w-11 h-6 rounded-full shrink-0 transition-colors ${theme.acnhChatSync !== false ? 'bg-primary' : 'bg-slate-300'}`}
+                                aria-label="聊天界面跟随动森"
+                            >
+                                <span className={`absolute top-0.5 left-0.5 w-5 h-5 rounded-full bg-white shadow transition-transform ${theme.acnhChatSync !== false ? 'translate-x-5' : ''}`} />
+                            </button>
+                        </div>
+                    )}
+                </section>
+
                 <section className="bg-white rounded-3xl p-5 shadow-sm border border-slate-100">
                     <h2 className="text-sm font-bold text-slate-400 uppercase tracking-widest mb-4">Preset Themes</h2>
                     <div className="flex gap-3 mb-6 overflow-x-auto no-scrollbar pb-1">
@@ -1323,7 +1484,7 @@ const Appearance: React.FC = () => {
                 currentTheme={theme}
             />
         ) : activeTab === 'chat' ? (
-            <ModularChatAppearanceEditor theme={theme} updateTheme={updateTheme} />
+            <ModularChatAppearanceEditor theme={theme} updateTheme={updateTheme} onResetAllChrome={resetAllChromeCss} />
         ) : null}
       </div>
     </div>

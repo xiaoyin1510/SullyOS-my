@@ -17,7 +17,7 @@
 // through this pipeline.
 
 import { build } from 'esbuild';
-import { existsSync, statSync } from 'fs';
+import { existsSync, statSync, readFileSync, writeFileSync } from 'fs';
 import { resolve, dirname } from 'path';
 import { fileURLToPath } from 'url';
 
@@ -29,6 +29,16 @@ const root = resolve(__dirname, '..');
 //   - flat single-file workers (worker/<name>.ts → public/<name>.js only — no worker.bundle.js sibling)
 const WORKERS = [
   { name: 'instant-push', outName: 'instant-worker.bundle.js' },
+  // instant-push 的 Deno Deploy 入口: 同一份 worker, 换 Deno.serve 包装。
+  // worker.deno.bundle.js 供整份贴进 dash.deno.com Playground;
+  // public/ 副本让站点把它当静态文件发布, Playground 里一行
+  // `import "https://<站点>/instant-worker.deno.bundle.js"` 即可加载运行。
+  {
+    name: 'instant-push-deno',
+    entryPath: 'worker/instant-push/src/deno.ts',
+    outWorker: 'worker/instant-push/worker.deno.bundle.js',
+    outPublic: 'public/instant-worker.deno.bundle.js',
+  },
   // sw-keep-alive 是 SullyOS 的 service worker, 唯一消费者是浏览器从 /public 静态读, 不需要
   // CF wrangler 单独部署 (没 worker.bundle.js sibling). 之前 bundle 是手工跑 esbuild, Round 2
   // 起接进 build:workers 一起做, 避免 worker/sw-keep-alive.ts 跟 public/sw-keep-alive.js 漂移.
@@ -72,7 +82,7 @@ for (const w of WORKERS) {
 
   let outWorker = null;
   if (!w.skipWorkerOut) {
-    outWorker = resolve(root, 'worker', w.name, 'worker.bundle.js');
+    outWorker = resolve(root, w.outWorker || `worker/${w.name}/worker.bundle.js`);
     outputs.push(outWorker);
   }
   let outPublic = null;
@@ -92,8 +102,20 @@ for (const w of WORKERS) {
   const sizeRef = outWorker || outPublic;
   const sizeKb = (statSync(sizeRef).size / 1024).toFixed(1);
   const dest = [
-    outWorker && `worker/${w.name}/worker.bundle.js`,
+    outWorker && (w.outWorker || `worker/${w.name}/worker.bundle.js`),
     outPublic && (w.outPublic || `public/${w.outName}`),
   ].filter(Boolean).join(' + ');
   console.log(`✓ ${w.name.padEnd(16)} ${sizeKb} KB  → ${dest}`);
 }
+
+// instant-worker.version.txt — Deno loader 冷启动时拉这个文件决定 bundle 版本号
+// (见 utils/instantPushClient.ts 的 buildDenoLoaderSnippet)。从
+// utils/instantWorkerVersion.ts 提取, 与 /version 路由同源, 不会漂移。
+const versionSrc = readFileSync(resolve(root, 'utils/instantWorkerVersion.ts'), 'utf8');
+const versionMatch = versionSrc.match(/INSTANT_WORKER_VERSION\s*=\s*'([^']+)'/);
+if (!versionMatch) {
+  console.error('ERROR: cannot extract INSTANT_WORKER_VERSION from utils/instantWorkerVersion.ts');
+  process.exit(1);
+}
+writeFileSync(resolve(root, 'public/instant-worker.version.txt'), `${versionMatch[1]}\n`);
+console.log(`✓ instant-worker.version.txt → ${versionMatch[1]}`);

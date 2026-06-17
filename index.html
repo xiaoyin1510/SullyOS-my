@@ -24,7 +24,7 @@
     <link rel="stylesheet" href="https://unpkg.com/katex@0.16.9/dist/katex.min.css" integrity="sha384-n8MVd4RsNIU0tAv4ct0nTaAbDJwPJzDEaqSD1odI+WdtXRGWt2kTvGFasHpSy3SV" crossorigin="anonymous">
 
     <script src="https://cdn.tailwindcss.com"></script>
-    <link href="https://fonts.googleapis.com/css2?family=Quicksand:wght@300;400;500;600&family=DM+Serif+Display:ital@0;1&family=Caveat:wght@400;500;600;700&family=Shippori+Mincho:wght@400;500;600;700&family=Courier+Prime:ital,wght@0,400;0,700;1,400&family=Ma+Shan+Zheng&family=Long+Cang&family=ZCOOL+KuaiLe&family=ZCOOL+XiaoWei&display=swap" rel="stylesheet">
+    <link href="https://fonts.googleapis.com/css2?family=Quicksand:wght@300;400;500;600&family=Nunito:wght@400;500;600;700;800;900&family=Noto+Sans+SC:wght@400;500;700;900&family=DM+Serif+Display:ital@0;1&family=Caveat:wght@400;500;600;700&family=Shippori+Mincho:wght@400;500;600;700&family=Courier+Prime:ital,wght@0,400;0,700;1,400&family=Ma+Shan+Zheng&family=Long+Cang&family=ZCOOL+KuaiLe&family=ZCOOL+XiaoWei&display=swap" rel="stylesheet">
     <script>
       tailwind.config = {
         theme: {
@@ -118,6 +118,11 @@
         --app-height: 100lvh;
         --keyboard-inset: 0px;
         --app-font: 'Quicksand', sans-serif;
+      }
+      /* 动森风格皮肤：拉丁/数字用 Nunito（圆润），中文用 ZCOOL KuaiLe（可爱），保留 Noto Sans SC 兜底。
+         选择 html[data-skin] 而非 :root，优先级更高，能盖过运行时注入的 --app-font。 */
+      html[data-skin="animalcrossing"] {
+        --app-font: 'Nunito', 'ZCOOL KuaiLe', 'Noto Sans SC', sans-serif;
       }
       html, body, #root {
         width: 100%;

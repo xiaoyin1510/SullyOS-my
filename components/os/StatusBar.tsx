@@ -26,6 +26,7 @@ const StatusBar: React.FC = () => {
 
   // Use content color from theme
   const textColor = theme.contentColor || '#ffffff';
+  const acnh = theme.skin === 'animalcrossing'; // 动森彩蛋：电量条用叶绿色
 
   useEffect(() => {
     const initBattery = async () => {
@@ -83,8 +84,8 @@ const StatusBar: React.FC = () => {
           <div className="flex items-center gap-1">
             <span>{batteryLevel}%</span>
             <div className="w-5 h-2.5 border border-current rounded-[3px] p-[1px] relative opacity-80 flex items-center">
-              <div 
-                  className={`h-full rounded-[1px] ${isCharging ? 'bg-green-400' : 'bg-current'}`} 
+              <div
+                  className={`h-full rounded-[1px] ${isCharging ? 'bg-green-400' : acnh ? 'bg-[#7cba4c]' : 'bg-current'}`}
                   style={{ width: `${batteryLevel}%` }}
               ></div>
               {isCharging && (

@@ -531,8 +531,11 @@ const flushInboxToChatImpl = async () => {
 
     // 不管走 post-processing 还是 raw fallback, 单条 inbox message 触发一次 'active-msg-received',
     // 保留原有 toast / 未读 / 通知 / sendInstantPush resolver 语义。body 用原文做预览即可。
+    // sessionId 必须带出来: instantPushClient 的 observed listener 用它做 receipt identity 匹配,
+    // 杜绝同 char 多轮并发 / 延迟到达的旧 push 被新一轮 send 误判为 delivered。
     window.dispatchEvent(new CustomEvent('active-msg-received', {
       detail: {
+        sessionId: (message as any).sessionId || (message.metadata as any)?.sessionId,
         charId: message.charId,
         charName: message.charName,
         body: message.previewBody || message.body,

@@ -113,6 +113,7 @@ const isSullyChar = (char: CharacterProfile): boolean => {
 const sullyPresets = (): Record<string, string> => ({
     skin: 'skin_1',
     fronthair: 'fronthair_99',
+    back1: 'back1_99',
     eyes: 'eyes_99',
 });
 
@@ -155,9 +156,19 @@ export const CreatorIframe: React.FC<CreatorIframeProps> = ({ mode, charName, pr
         const w = iframeRef.current?.contentWindow;
         if (!w) return;
         const p = paramsRef.current;
+        // iframe 内 env(safe-area-inset-bottom) 在 iOS standalone PWA 不可靠（多为 0），
+        // 把外层 JS probe 写到 :root 的 --standalone-safe-area-bottom 透传进去。
+        const rootStyles = typeof window !== 'undefined' ? getComputedStyle(document.documentElement) : null;
+        const safeBottomRaw = rootStyles?.getPropertyValue('--standalone-safe-area-bottom').trim() || '';
+        const safeBottomPx = Number.parseFloat(safeBottomRaw) || 0;
         w.postMessage({
             type: 'like520_init',
-            payload: { ...p, isSully: !!p.isSully, extraItems: extraItemsRef.current },
+            payload: {
+                ...p,
+                isSully: !!p.isSully,
+                extraItems: extraItemsRef.current,
+                safeBottomPx,
+            },
         }, '*');
         initSentRef.current = true;
     };
@@ -261,6 +272,10 @@ const LIKE520_CSS = `
   width: 100%;
   height: 100%;
   overflow: hidden;
+  /* 不在这里加 padding-top/bottom safe area：.l520-root 自身有 cream 渐变背景，
+     而内部 .l520-mask / .l520-corner / .l520-ornaments 都是 absolute inset:0，
+     padding 会让它们整体内缩，露出上下两条 cream 色块（选择卡的深棕蒙版尤其明显）。
+     各 phase 内 in-flow 内容由自身留白处理，外壳 fixed inset-0 已覆盖整屏。 */
   font-family: 'Noto Serif SC', 'Cormorant Garamond', serif;
   color: var(--ink);
   background:
@@ -312,7 +327,8 @@ const LIKE520_CSS = `
 
 .l520-topbar {
   position: relative; z-index: 5;
-  padding: 14px 18px 6px;
+  /* in-flow 自吃刘海让位（外壳 .l520-root 不能加 padding，否则 absolute mask/装饰被推出露色块） */
+  padding: calc(14px + var(--safe-top)) 18px 6px;
   display: flex; flex-direction: column; gap: 8px;
   flex-shrink: 0;
 }
@@ -691,7 +707,8 @@ const LIKE520_CSS = `
   display: grid;
   grid-template-columns: repeat(3, 1fr);
   gap: 8px;
-  padding: 10px 18px 16px;
+  /* in-flow 自吃 home 条让位 */
+  padding: 10px 18px calc(16px + var(--safe-bottom));
   flex-shrink: 0;
 }
 .l520-act {
@@ -954,7 +971,8 @@ const LIKE520_CSS = `
 /* ===== Letter ===== */
 .l520-letter-stage {
   flex: 1; overflow-y: auto;
-  padding: 14px 18px 18px;
+  /* in-flow 自吃刘海 + home 条让位 */
+  padding: calc(14px + var(--safe-top)) 18px calc(18px + var(--safe-bottom));
   position: relative; z-index: 5;
 }
 .l520-letter-paper {
@@ -2105,7 +2123,7 @@ const WakeUpView: React.FC<{
                         style={{
                             position: 'relative',
                             zIndex: 3,
-                            paddingBottom: 28,
+                            paddingBottom: 'calc(28px + var(--safe-bottom))',
                             animation: 'l520-fade-in 0.8s ease-out both',
                         }}
                     >
@@ -2206,7 +2224,7 @@ const UncoveredLineView: React.FC<{
                     />
                 </div>
             </div>
-            <div style={{ position: 'relative', zIndex: 3, paddingBottom: 18 }}>
+            <div style={{ position: 'relative', zIndex: 3, paddingBottom: 'calc(18px + var(--safe-bottom))' }}>
                 <OrnateDialog
                     charName={charName}
                     onAdvance={() => { if (isLast) onComplete(); else setIdx(i => i + 1); }}
@@ -2326,7 +2344,7 @@ const ExitButton: React.FC<{ onClick: () => void }> = ({ onClick }) => (
         onClick={onClick}
         title="关闭"
         style={{
-            position: 'absolute', top: 10, right: 10, zIndex: 50,
+            position: 'absolute', top: 'calc(10px + var(--safe-top))', right: 10, zIndex: 50,
             width: 30, height: 30, borderRadius: '50%',
             background: 'rgba(255,248,236,0.92)',
             border: '1px solid #b8923f',
@@ -2554,7 +2572,7 @@ const PuzzleView: React.FC<{
             <CornerOrnaments />
             <AmbientLayer />
             <ExitButton onClick={onClose} />
-            <div style={{ flex: 1, overflowY: 'auto', padding: '24px 16px', position: 'relative', zIndex: 5, display: 'flex', flexDirection: 'column', alignItems: 'center', maxWidth: 420, margin: '0 auto' }}>
+            <div style={{ flex: 1, overflowY: 'auto', padding: 'calc(24px + var(--safe-top)) 16px calc(24px + var(--safe-bottom))', position: 'relative', zIndex: 5, display: 'flex', flexDirection: 'column', alignItems: 'center', maxWidth: 420, margin: '0 auto' }}>
                 <div style={{ color: '#7a2e3a', fontFamily: "'Noto Serif SC', serif", fontSize: 13, letterSpacing: 5, marginBottom: 4 }}>♥ 拼 图 卡 片 ♥</div>
                 <div style={{ color: '#9D7585', fontFamily: "'Cormorant Garamond', serif", fontStyle: 'italic', fontSize: 11, letterSpacing: 3, marginBottom: 14 }}>{title}</div>
                 {photoUrl ? (
@@ -3391,7 +3409,11 @@ export const Like520Session: React.FC<SessionProps> = ({ charId, onClose }) => {
             )}
 
             {phase === 'char_creator' && (
-                <div className="absolute inset-0">
+                // wrapper 顶让位刘海给 iframe 用，背景染成跟 iframe 内顶部同色，看不出色块；
+                // 底由 iframe 内 .panel 自己的 calc(12px + env(safe-area-inset-bottom)) 让位 home 条（viewport-fit=cover 已开）。
+                // 浮动 X 退出 —— iframe HTML 自身没有返回键，不给的话进了捏脸只能"出件"才能往下走。
+                <div className="absolute inset-0" style={{ paddingTop: 'var(--safe-top)', background: '#FFF1E6' }}>
+                    <ExitButton onClick={onClose} />
                     <CreatorIframe
                         mode="char"
                         charName={char.name}
@@ -3424,7 +3446,8 @@ export const Like520Session: React.FC<SessionProps> = ({ charId, onClose }) => {
             )}
 
             {phase === 'user_creator' && (
-                <div className="absolute inset-0">
+                <div className="absolute inset-0" style={{ paddingTop: 'var(--safe-top)', background: '#FFF1E6' }}>
+                    <ExitButton onClick={onClose} />
                     <CreatorIframe
                         mode="user"
                         charName={char.name}

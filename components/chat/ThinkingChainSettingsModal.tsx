@@ -96,6 +96,7 @@ const ThinkingChainSettingsModal: React.FC<Props> = ({ isOpen, onClose, value, o
     return (
         <div
             className="fixed inset-0 z-[200] flex items-end sm:items-center justify-center bg-black/40 backdrop-blur-[1px]"
+            style={{ paddingBottom: 'var(--safe-bottom)' }}
             onClick={onClose}
         >
             <div

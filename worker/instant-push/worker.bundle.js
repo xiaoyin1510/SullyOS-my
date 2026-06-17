@@ -188,7 +188,7 @@ function concatBytes(...chunks) {
   return out;
 }
 
-// node_modules/.pnpm/@rei-standard+amsg-instant@0.9.0/node_modules/@rei-standard/amsg-instant/dist/adapters/cloudflare.mjs
+// node_modules/.pnpm/@rei-standard+amsg-instant@0.9.1/node_modules/@rei-standard/amsg-instant/dist/adapters/cloudflare.mjs
 function isValidUrl(s) {
   if (typeof s !== "string") return false;
   try {
@@ -1115,13 +1115,19 @@ function readReasoningContent(llmResponse) {
   }
   const content = message?.content;
   if (typeof content === "string") {
-    const match = content.match(/<(think|thinking|thought)>([\s\S]*?)<\/\1>/i);
+    const match = content.match(REASONING_TAG_RE);
     if (match) {
       const trimmed = match[2].trim();
       if (trimmed.length > 0) return trimmed;
     }
   }
   return null;
+}
+var REASONING_TAG_RE = /<(think|thinking|thought)>([\s\S]*?)<\/\1>/i;
+var REASONING_TAG_RE_G = /<(think|thinking|thought)>[\s\S]*?<\/\1>/gi;
+function stripReasoningTags(content) {
+  if (typeof content !== "string" || !content.includes("<")) return content;
+  return content.replace(REASONING_TAG_RE_G, "").trim();
 }
 async function processInstantMessage(payload, ctx) {
   if (!ctx.onLLMOutput && !ctx.isResume) {
@@ -1159,6 +1165,7 @@ async function runLegacyInstant(payload, ctx) {
   const metadata = payload.metadata || {};
   const reasoning = readReasoningContent(llmResponse);
   if (reasoning) {
+    messageContent = stripReasoningTags(messageContent);
     const reasoningPush = buildReasoningPush({
       messageType: MESSAGE_TYPE.INSTANT,
       source: PUSH_SOURCE.INSTANT,
@@ -1622,6 +1629,11 @@ var SSE_KEEPALIVE_BYTES = SSE_ENCODER.encode(": keepalive\n\n");
 var SSE_DONE_BYTES = SSE_ENCODER.encode("event: done\ndata: {}\n\n");
 var DEFAULT_SSE_KEEPALIVE_MS = 1e3;
 var MIN_SSE_KEEPALIVE_MS = 250;
+function acceptsJsonOnly(acceptHeader) {
+  if (typeof acceptHeader !== "string" || acceptHeader.length === 0) return false;
+  const ranges = acceptHeader.split(",").map((r) => r.split(";")[0].trim().toLowerCase()).filter(Boolean);
+  return ranges.length > 0 && ranges.every((r) => r === "application/json");
+}
 function createInstantHandler(options) {
   if (!options) throw new Error("[amsg-instant] options is required");
   if (!options.vapid) throw new Error("[amsg-instant] options.vapid is required");
@@ -1730,7 +1742,7 @@ function createInstantHandler(options) {
       });
     }
     try {
-      const isPurePush = request.headers.get("accept") === "application/json";
+      const isPurePush = acceptsJsonOnly(request.headers.get("accept"));
       const sessionId = typeof payload.sessionId === "string" && payload.sessionId ? payload.sessionId : `sess_${randomUUID()}`;
       const processorCtx = {
         vapid: options.vapid,
@@ -1887,12 +1899,9 @@ data: ${JSON.stringify(stableBody)}
                   controller.enqueue(SSE_DONE_BYTES);
                 } catch {
                 }
-                safeClose();
               }
             } catch (err) {
-              if (err instanceof HookError) {
-                safeClose();
-              } else {
+              if (!(err instanceof HookError)) {
                 const diag = buildErrorPush({
                   messageType: MESSAGE_TYPE.INSTANT,
                   source: PUSH_SOURCE.INSTANT,
@@ -1905,11 +1914,11 @@ data: ${JSON.stringify(stableBody)}
                 await safeEnqueue("error", diag, (pushErr) => {
                   onEvent({ type: "sse_error_fallback_failed", sessionId, cause: pushErr });
                 });
-                safeClose();
               }
             } finally {
               cleanup();
               await Promise.allSettled(Array.from(backupWork));
+              safeClose();
               resolveStartDone();
             }
           },
@@ -2200,7 +2209,7 @@ function createCloudflareWorker(optionsBuilder) {
   };
 }
 
-// node_modules/.pnpm/@rei-standard+amsg-instant@0.9.0/node_modules/@rei-standard/amsg-instant/dist/blob/d1.mjs
+// node_modules/.pnpm/@rei-standard+amsg-instant@0.9.1/node_modules/@rei-standard/amsg-instant/dist/blob/d1.mjs
 function createD1BlobStore(db, opts = {}) {
   if (!db || typeof db.prepare !== "function") {
     throw new TypeError("createD1BlobStore: db must be a D1 Database binding");
@@ -2233,7 +2242,7 @@ function sanitizeTable(value) {
   return value;
 }
 
-// node_modules/.pnpm/@rei-standard+amsg-instant@0.9.0/node_modules/@rei-standard/amsg-instant/dist/index.mjs
+// node_modules/.pnpm/@rei-standard+amsg-instant@0.9.1/node_modules/@rei-standard/amsg-instant/dist/index.mjs
 var TEXT_ENCODER2 = new TextEncoder();
 var TEXT_DECODER2 = new TextDecoder("utf-8", { fatal: false });
 function utf82(str) {
@@ -2331,7 +2340,7 @@ var stripChineseDate = (t) => t.replace(/\[\d{4}[-/年]\d{1,2}[-/月]\d{1,2}.*?\
 var stripRoleNamePrefix = (t) => t.replace(/^[\w一-龥]+:\s*/, "");
 var stripBusinessTagsForBubble = (t) => t.replace(/\[\[(?:ACTION|RECALL|SEARCH|DIARY|READ_DIARY|FS_DIARY|FS_READ_DIARY|DIARY_START|DIARY_END|FS_DIARY_START|FS_DIARY_END|MUSIC_ACTION)[:\s][\s\S]*?\]\]/g, "").replace(/\[schedule_message[^\]]*\]/g, "");
 var stripBusinessTagsForNotification = (t) => stripBusinessTagsForBubble(t).replace(/\[\[(?:READ_NOTE|XHS_[A-Z_]+)[:\s][\s\S]*?\]\]/g, "").replace(/\[\[XHS_[A-Z_]+\]\]/g, "");
-var stripQuotes = (t) => t.replace(/\[\[(?:QU[OA]TE|引用)[：:][\s\S]*?\]\]/g, "").replace(/\[(?:QU[OA]TE|引用)[：:][^\]]*\]/g, "").replace(/\[回复\s*[""“][^""”]*?[""”](?:\.{0,3})\]\s*[：:]?\s*/g, "");
+var stripQuotes = (t) => t.replace(/\[\[(?:QU[OA]TE|引用)[：:][\s\S]*?\]\]/g, "").replace(/\[(?:QU[OA]TE|引用)[：:][^\]]*\]/g, "").replace(/\[回复\s*[""“][^""”]*?[""”](?:\.{0,3})\]\s*[：:]?\s*/g, "").replace(/\[[^\[\]\n「」]{0,24}引用了[^\[\]\n「」]{0,24}「[^」\n]*?」[^\[\]\n]{0,24}\]\s*/g, "");
 var stripMarkdownHeaders = (t) => t.replace(/^#{1,6}\s+/gm, "");
 var stripMarkdownBold = (t) => t.replace(/\*{2,}/g, "");
 var stripMarkdownDividers = (t) => t.replace(/^\s*---\s*$/gm, "").replace(/^\s*[-*+]\s*$/gm, "");
@@ -2717,14 +2726,16 @@ function classifyLLMOutput(text) {
 }
 
 // utils/instantWorkerVersion.ts
-var INSTANT_WORKER_VERSION = "2026-06-01";
+var INSTANT_WORKER_VERSION = "2026-06-16";
 
 // worker/instant-push/src/index.ts
 var MULTIPART_TRANSPORT = { enabled: true };
 var UTILITY_CORS_HEADERS = {
   "Access-Control-Allow-Origin": "*",
   "Access-Control-Allow-Methods": "GET, POST, OPTIONS",
-  "Access-Control-Allow-Headers": "Content-Type, Authorization, X-Client-Token",
+  // X-Amsg-Request-Encoding: 大请求体 gzip 上行用的自定义头 (见 decodeGzipRequestBody)。
+  // 跨域带它会触发 CORS 预检, 必须放行, 否则浏览器拦请求。amsg-instant 库的预检不含它, 故 worker 自己回预检。
+  "Access-Control-Allow-Headers": "Content-Type, Authorization, X-Client-Token, X-Amsg-Request-Encoding",
   "Access-Control-Max-Age": "86400"
 };
 var D1_BLOB_TABLE = "amsg_transient_blobs";
@@ -2753,6 +2764,14 @@ var ERROR_EVENT_TYPES = /* @__PURE__ */ new Set([
   "multipart_too_many_chunks"
 ]);
 var TRACE_EVENT_TYPES = /* @__PURE__ */ new Set([
+  // 主链路里程碑: 一次会话的完整叙事是
+  //   request → llm_start → llm_done → push_sent×N (前台还有 sse_payload_enqueued)
+  // llm_start 和 llm_done 之间的安静期 = 在等上游 LLM, 不是卡死。
+  "request",
+  "llm_start",
+  "llm_done",
+  "push_sent",
+  "multipart_sent",
   "sse_stream_aborted",
   "sse_stream_canceled",
   "sse_payload_enqueued",
@@ -2766,13 +2785,49 @@ var TRACE_EVENT_TYPES = /* @__PURE__ */ new Set([
   "wait_until_rejected",
   "wait_until_failed"
 ]);
+var POST_ABORT_HEARTBEAT_MS = 1e4;
+var POST_ABORT_HEARTBEAT_MAX_TICKS = 30;
+var postAbortWatchers = /* @__PURE__ */ new Map();
+function startPostAbortHeartbeat(sessionId) {
+  if (postAbortWatchers.has(sessionId)) return;
+  const abortedAt = Date.now();
+  let ticks = 0;
+  const timer = setInterval(() => {
+    ticks += 1;
+    console.log("[instant-push:trace]", {
+      type: "post_abort_alive",
+      sessionId,
+      sinceAbortMs: Date.now() - abortedAt
+    });
+    if (ticks >= POST_ABORT_HEARTBEAT_MAX_TICKS) {
+      clearInterval(timer);
+      postAbortWatchers.delete(sessionId);
+    }
+  }, POST_ABORT_HEARTBEAT_MS);
+  postAbortWatchers.set(sessionId, timer);
+}
+function flattenAmsgEvent(e) {
+  const cause = e.cause;
+  if (cause == null) return e;
+  return {
+    ...e,
+    cause: void 0,
+    causeName: cause?.name,
+    causeMessage: cause?.message ?? String(cause),
+    causeStatus: cause?.statusCode ?? cause?.status
+  };
+}
 function traceAmsgEvent(e) {
+  if (e.type === "sse_stream_aborted" && typeof e.sessionId === "string") {
+    startPostAbortHeartbeat(e.sessionId);
+  }
+  const formatted = flattenAmsgEvent(e);
   if (ERROR_EVENT_TYPES.has(e.type)) {
-    console.error("[instant-push]", e);
+    console.error("[instant-push]", formatted);
     return;
   }
   if (TRACE_EVENT_TYPES.has(e.type)) {
-    console.log("[instant-push:trace]", e);
+    console.log("[instant-push:trace]", formatted);
   }
 }
 function parseBooleanFlag(value) {
@@ -3068,25 +3123,69 @@ async function runEmotionEval(body) {
     return "";
   }
 }
+function withSseAntiBufferingHeaders(resp) {
+  const contentType = resp.headers.get("content-type") || "";
+  if (!contentType.includes("text/event-stream")) return resp;
+  const headers = new Headers(resp.headers);
+  headers.set("Cache-Control", "no-cache, no-transform");
+  headers.set("X-Accel-Buffering", "no");
+  return new Response(resp.body, {
+    status: resp.status,
+    statusText: resp.statusText,
+    headers
+  });
+}
+async function decodeGzipRequestBody(request) {
+  if (request.headers.get("x-amsg-request-encoding") !== "gzip" || !request.body) {
+    return request;
+  }
+  const decompressed = await new Response(
+    request.body.pipeThrough(new DecompressionStream("gzip"))
+  ).arrayBuffer();
+  const headers = new Headers(request.headers);
+  headers.delete("x-amsg-request-encoding");
+  headers.delete("content-length");
+  return new Request(request.url, {
+    method: request.method,
+    headers,
+    body: decompressed
+  });
+}
 var src_default = {
   fetch: async (request, env, ctx) => {
     const url = new URL(request.url);
+    if (request.method === "OPTIONS") {
+      return new Response(null, { status: 204, headers: UTILITY_CORS_HEADERS });
+    }
     if (url.pathname === "/version") {
       return handleVersionRequest(request);
     }
     if (url.pathname === "/capabilities" || url.pathname === "/health") {
       return handleCapabilitiesRequest(request, env);
     }
+    let decodedRequest;
+    try {
+      decodedRequest = await decodeGzipRequestBody(request);
+    } catch {
+      return new Response(JSON.stringify({ error: "Failed to decompress request body" }), {
+        status: 400,
+        headers: {
+          ...UTILITY_CORS_HEADERS,
+          "Content-Type": "application/json"
+        }
+      });
+    }
     let body = null;
     try {
-      body = await request.clone().json();
+      body = await decodedRequest.clone().json();
     } catch {
       body = null;
     }
     const requestedEnv = withRequestOversizeTransport({ ...env }, body);
     const workerEnv = await prepareBlobStoreEnv(requestedEnv);
     scheduleD1BlobCleanup(workerEnv, ctx);
-    return await cfWorker.fetch(request, workerEnv, ctx);
+    const resp = await cfWorker.fetch(decodedRequest, workerEnv, ctx);
+    return withSseAntiBufferingHeaders(resp);
   },
   async scheduled(_event, env) {
     const workerEnv = await prepareBlobStoreEnv(env);

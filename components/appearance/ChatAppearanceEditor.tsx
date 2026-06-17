@@ -4,6 +4,8 @@ import { OSTheme } from '../../types';
 type Props = {
     theme: OSTheme;
     updateTheme: (updates: Partial<OSTheme>) => void;
+    /** 一键还原全部聊天白框 CSS（全局 + 每个角色），兼作坏 CSS 救援。 */
+    onResetAllChrome?: () => void;
 };
 
 const presets: Array<{ name: string; desc: string; config: Partial<OSTheme> }> = [
@@ -147,6 +149,7 @@ const defaults = {
 } as const;
 
 const groupClass = 'rounded-3xl border border-slate-100 bg-white p-5 shadow-sm';
+
 
 const choices = {
     chrome: [
@@ -317,7 +320,7 @@ const ChoiceGroup: React.FC<{
     </div>
 );
 
-export const ChatAppearanceEditor: React.FC<Props> = ({ theme, updateTheme }) => {
+export const ChatAppearanceEditor: React.FC<Props> = ({ theme, updateTheme, onResetAllChrome }) => {
     const avatarShape = theme.chatAvatarShape || defaults.chatAvatarShape;
     const avatarSize = theme.chatAvatarSize || defaults.chatAvatarSize;
     const avatarMode = theme.chatAvatarMode || defaults.chatAvatarMode;
@@ -333,6 +336,7 @@ export const ChatAppearanceEditor: React.FC<Props> = ({ theme, updateTheme }) =>
     const statusStyle = theme.chatStatusStyle || defaults.chatStatusStyle;
     const sendButtonStyle = theme.chatSendButtonStyle || defaults.chatSendButtonStyle;
     const pendingIndicator = theme.chatPendingIndicator !== false;
+    const showHeaderBuffs = theme.chatHideHeaderBuffs !== true;
 
     const headerClass =
         headerStyle === 'minimal'
@@ -385,25 +389,28 @@ export const ChatAppearanceEditor: React.FC<Props> = ({ theme, updateTheme }) =>
                     <h2 className="text-sm font-bold uppercase tracking-widest text-slate-400">实时预览</h2>
                     <p className="mt-1 text-[10px] text-slate-400">头部、消息区和输入栏都会跟着你的选择同步变化。</p>
                 </div>
-                <div className={`overflow-hidden rounded-[28px] ${shellClass(chromeStyle)}`} style={backgroundStyleForPreview(backgroundStyle, chromeStyle)}>
-                    <div className={`${headerClass} ${previewPad}`}>
+                <div className={`sully-chat-root overflow-hidden rounded-[28px] ${shellClass(chromeStyle)}`} style={backgroundStyleForPreview(backgroundStyle, chromeStyle)}>
+                    {/* 实时套用「白框自定义」CSS：预览各零件挂了同样的 .sully-chat-* 钩子，故能即时反映。
+                        注意：预览外壳 overflow-hidden 会裁掉溢出效果（如波浪下沿），真聊天里完整可见。 */}
+                    {theme.chatChromeCustomCss && <style>{theme.chatChromeCustomCss}</style>}
+                    <div className={`sully-chat-header relative ${headerClass} ${previewPad}`}>
                         <div className={`flex items-center gap-3 ${headerAlign === 'center' ? 'justify-center text-center' : 'justify-between text-left'}`}>
                             <div className={`flex items-center gap-3 ${headerAlign === 'center' ? 'justify-center' : ''}`}>
                                 <div
-                                    className={`${avatarClass(avatarShape, avatarSize)} shrink-0`}
+                                    className={`sully-chat-avatar ${avatarClass(avatarShape, avatarSize)} shrink-0`}
                                     style={{
                                         background: headerStyle === 'discord' ? 'linear-gradient(135deg, rgba(99,102,241,0.9), rgba(34,197,94,0.9))' : 'linear-gradient(135deg, rgba(59,130,246,0.18), rgba(244,114,182,0.18))',
                                         border: headerStyle === 'pixel' ? '2px solid #8f674a' : '1px solid rgba(255,255,255,0.5)',
                                     }}
                                 />
-                                <div className={headerAlign === 'center' ? 'flex flex-col items-center' : ''}>
-                                    <div className={`text-xs font-bold ${headerTextClass}`}>聊天对象</div>
+                                <div className={`sully-chat-status ${headerAlign === 'center' ? 'flex flex-col items-center' : ''}`}>
+                                    <div className={`sully-chat-name text-xs font-bold ${headerTextClass}`}>聊天对象</div>
                                     {statusStyle === 'pill' && <div className={`rounded-full px-2 py-0.5 text-[9px] font-bold ${headerStyle === 'discord' ? 'bg-emerald-500/20 text-emerald-200' : headerStyle === 'pixel' ? 'bg-[#fff7ed] text-[#8f674a]' : 'bg-emerald-50 text-emerald-500'}`}>online</div>}
                                     {statusStyle === 'dot' && <div className={`flex items-center gap-1 text-[9px] ${headerStyle === 'discord' ? 'text-slate-300' : headerStyle === 'pixel' ? 'text-[#f3ddc7]' : 'text-slate-400'}`}><span className="h-1.5 w-1.5 rounded-full bg-emerald-400" />online</div>}
                                     {statusStyle === 'subtle' && <div className={`text-[9px] uppercase ${headerStyle === 'discord' ? 'text-slate-400' : headerStyle === 'pixel' ? 'text-[#f3ddc7]' : 'text-slate-400'}`}>online</div>}
                                 </div>
                             </div>
-                            {headerAlign !== 'center' && <div className={`text-[9px] font-mono ${headerStyle === 'discord' ? 'text-slate-400' : headerStyle === 'pixel' ? 'text-[#f3ddc7]' : 'text-slate-400'}`}>42 tok</div>}
+                            {headerAlign !== 'center' && <div className={`sully-chat-token text-[9px] font-mono ${headerStyle === 'discord' ? 'text-slate-400' : headerStyle === 'pixel' ? 'text-[#f3ddc7]' : 'text-slate-400'}`}>42 tok</div>}
                         </div>
                     </div>
                     <div className={`flex min-h-[190px] flex-col p-4 ${previewGap}`}>
@@ -426,7 +433,7 @@ export const ChatAppearanceEditor: React.FC<Props> = ({ theme, updateTheme }) =>
                             );
                         })}
                     </div>
-                    <div className={`border-t px-3 py-3 ${chromeStyle === 'pixel' ? 'border-[#8f674a] bg-[#eadfce]' : headerStyle === 'discord' ? 'border-white/10 bg-slate-900/90' : 'border-slate-100 bg-white/80'}`}>
+                    <div className={`sully-chat-inputbar border-t px-3 py-3 ${chromeStyle === 'pixel' ? 'border-[#8f674a] bg-[#eadfce]' : headerStyle === 'discord' ? 'border-white/10 bg-slate-900/90' : 'border-slate-100 bg-white/80'}`}>
                         <div className="flex items-end gap-2">
                             <button className={`flex h-10 w-10 shrink-0 items-center justify-center ${chromeStyle === 'pixel' ? 'rounded-[4px] border-2 border-[#8f674a] bg-[#f8f0e0] text-[#8f674a]' : headerStyle === 'discord' ? 'rounded-full bg-slate-800 text-slate-200' : 'rounded-full bg-slate-100 text-slate-500'}`}>+</button>
                             <div className={`flex min-h-10 flex-1 items-center px-4 text-[11px] ${inputStyle === 'flat' ? 'rounded-none border-b border-slate-200 bg-transparent' : inputStyle === 'wechat' ? 'rounded-full border border-slate-200 bg-white' : inputStyle === 'ios' ? 'rounded-[26px] border border-white/80 bg-white/80 shadow-inner' : inputStyle === 'telegram' ? 'rounded-2xl border border-sky-100 bg-white' : inputStyle === 'discord' ? 'rounded-2xl border border-white/10 bg-slate-800 text-white' : inputStyle === 'pixel' ? 'rounded-[4px] border-2 border-[#8f674a] bg-[#f8f0e0]' : inputStyle === 'rounded' ? 'rounded-full bg-slate-100' : 'rounded-[22px] bg-slate-100'}`}>
@@ -457,6 +464,19 @@ export const ChatAppearanceEditor: React.FC<Props> = ({ theme, updateTheme }) =>
                 </div>
                 <div className="mt-4">
                     <ChoiceGroup title="在线状态样式" items={choices.status} value={statusStyle} onPick={(value) => updateTheme({ chatStatusStyle: value as OSTheme['chatStatusStyle'] })} />
+                </div>
+                <div className="mt-4 flex items-center justify-between rounded-2xl bg-slate-50 px-3 py-2.5">
+                    <div className="min-w-0 pr-3">
+                        <div className="text-[11px] font-bold text-slate-700">显示情绪栏</div>
+                        <div className="mt-0.5 text-[10px] text-slate-400">角色名下方的情绪 buff 胶囊；关掉后顶栏更干净（位置/样式也可在「白框自定义」里用 .sully-chat-buffs 调）。</div>
+                    </div>
+                    <button
+                        onClick={() => updateTheme({ chatHideHeaderBuffs: showHeaderBuffs })}
+                        className={`relative h-6 w-11 shrink-0 rounded-full transition-colors ${showHeaderBuffs ? 'bg-primary' : 'bg-slate-300'}`}
+                        aria-pressed={showHeaderBuffs}
+                    >
+                        <span className={`absolute top-0.5 h-5 w-5 rounded-full bg-white shadow transition-all ${showHeaderBuffs ? 'left-[22px]' : 'left-0.5'}`} />
+                    </button>
                 </div>
             </section>
 
@@ -497,6 +517,21 @@ export const ChatAppearanceEditor: React.FC<Props> = ({ theme, updateTheme }) =>
                 <div className="mt-4">
                     <ChoiceGroup title="发送按钮" items={choices.send} value={sendButtonStyle} onPick={(value) => updateTheme({ chatSendButtonStyle: value as OSTheme['chatSendButtonStyle'] })} />
                 </div>
+            </section>
+
+            <section className={groupClass}>
+                <div className="mb-3">
+                    <h2 className="text-sm font-bold uppercase tracking-widest text-slate-400">白框自定义 (CSS)</h2>
+                    <p className="mt-1 text-[10px] leading-relaxed text-slate-400">
+                        聊天白框美化现在按「单个角色」管理：进该角色聊天 →「＋」菜单 →「白框」里设置、预览、存预设。
+                        如果某个角色的 CSS 写坏了导致聊天界面异常、连设置都打不开，点下面一键还原全部即可恢复。
+                    </p>
+                </div>
+                <button
+                    onClick={() => { if (window.confirm('确定还原全部聊天白框美化？将清空「全局」以及「每个角色」的自定义 CSS（其它聊天外观设置不受影响）。')) onResetAllChrome?.(); }}
+                    className="w-full rounded-2xl border border-rose-200 bg-rose-50 px-4 py-3 text-[12px] font-bold text-rose-600 transition-all hover:bg-rose-100 active:scale-[0.99]">
+                    一键还原全部聊天白框美化（救援）
+                </button>
             </section>
 
             <div className="px-2 pb-2 text-center text-[10px] leading-relaxed text-slate-400">

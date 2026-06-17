@@ -8,7 +8,16 @@ import { minimaxFetch } from '../utils/minimaxEndpoint';
 import { hashTtsParams, getCachedTts, saveCachedTts } from '../utils/ttsCache';
 
 const DEFAULT_MODEL = 'speech-2.8-hd';
-const PREVIEW_TEXT = '你好呀，这是捏出来的新声音，听听看喜不喜欢？';
+// 多语言试听样例：点一下切换试听文本 + 对应 language_boost，方便听不同语种下的发音
+const PREVIEW_SAMPLES: { code: string; label: string; boost: string; text: string }[] = [
+  { code: 'zh', label: '中文', boost: 'Chinese', text: '你好呀，这是捏出来的新声音，听听看喜不喜欢？' },
+  { code: 'en', label: 'English', boost: 'English', text: 'Hey, this is the new voice I just put together — what do you think?' },
+  { code: 'ja', label: '日本語', boost: 'Japanese', text: 'こんにちは、これは新しく作った声だよ。気に入ってくれるといいな。' },
+  { code: 'ko', label: '한국어', boost: 'Korean', text: '안녕, 이건 내가 새로 만든 목소리야. 마음에 들었으면 좋겠다.' },
+  { code: 'fr', label: 'Français', boost: 'French', text: "Bonjour, voici la nouvelle voix que je viens de créer. Elle te plaît ?" },
+  { code: 'es', label: 'Español', boost: 'Spanish', text: 'Hola, esta es la nueva voz que acabo de crear. ¿Te gusta?' },
+];
+const PREVIEW_TEXT = PREVIEW_SAMPLES[0].text;
 const SOUND_EFFECTS_OPTIONS = [
   { value: '', label: '无音效' },
   { value: 'spacious_echo', label: '空旷回声' },
@@ -85,6 +94,7 @@ const VoiceDesignerApp: React.FC = () => {
 
   // ── Preview ──
   const [previewText, setPreviewText] = useState(PREVIEW_TEXT);
+  const [previewLang, setPreviewLang] = useState('zh');
   const [isGenerating, setIsGenerating] = useState(false);
   const [audioUrl, setAudioUrl] = useState('');
   const audioRef = useRef<HTMLAudioElement | null>(null);
@@ -135,7 +145,7 @@ const VoiceDesignerApp: React.FC = () => {
   };
 
   // ── Build TTS payload ──
-  const buildPayload = (text: string) => {
+  const buildPayload = (text: string, languageBoost?: string) => {
     const payload: any = {
       model: model || DEFAULT_MODEL,
       text,
@@ -143,6 +153,7 @@ const VoiceDesignerApp: React.FC = () => {
       output_format: 'url',
       audio_setting: { format: 'mp3', sample_rate: 32000, bitrate: 128000, channel: 1 },
     };
+    if (languageBoost) payload.language_boost = languageBoost;
 
     // voice_setting with timber_weights or single voice_id
     const validTimbers = timberWeights.filter(tw => tw.voice_id.trim());
@@ -198,7 +209,8 @@ const VoiceDesignerApp: React.FC = () => {
     const text = previewText.trim();
     if (!text) return addToast('请输入试听文本', 'error');
 
-    const payload = buildPayload(text);
+    const boost = PREVIEW_SAMPLES.find(s => s.code === previewLang)?.boost;
+    const payload = buildPayload(text, boost);
     if (!payload) return;
 
     setIsGenerating(true);
@@ -439,6 +451,13 @@ const VoiceDesignerApp: React.FC = () => {
               <p className="text-[10px] text-slate-400">添加多个音色并调节权重来混合出独特声线。单个音色也可以，后续在「音色微调」里精调。</p>
             </div>
 
+            <div className="flex items-start gap-1.5 bg-amber-50 border border-amber-200 rounded-xl px-3 py-2">
+              <Warning size={13} weight="fill" className="text-amber-500 shrink-0 mt-0.5" />
+              <p className="text-[10px] text-amber-700 leading-relaxed">
+                建议<b>只融合同一种语言</b>的音色。比如想要韩语角色，就只挑韩语音色来融——混入其它语种的音色容易让角色说话<b>带口音</b>。融好后用上方多语种样例分别试听确认。
+              </p>
+            </div>
+
             {timberWeights.map((tw, index) => (
               <div key={tw.id} className="bg-white rounded-2xl p-3 border border-slate-100 shadow-sm space-y-2">
                 <div className="flex items-center justify-between">
@@ -526,7 +545,19 @@ const VoiceDesignerApp: React.FC = () => {
 
         {/* ── Preview Section (always visible) ── */}
         <div className="bg-gradient-to-r from-violet-50 to-purple-50 rounded-2xl p-4 border border-violet-100 space-y-3">
-          <span className="text-xs font-bold text-violet-700">试听预览</span>
+          <div className="flex items-center justify-between">
+            <span className="text-xs font-bold text-violet-700">试听预览</span>
+            <span className="text-[9px] text-violet-400">点语种切换样例</span>
+          </div>
+          <div className="flex flex-wrap gap-1.5">
+            {PREVIEW_SAMPLES.map(s => (
+              <button key={s.code}
+                onClick={() => { setPreviewLang(s.code); setPreviewText(s.text); }}
+                className={`text-[10px] px-2.5 py-1 rounded-full font-bold transition-colors ${previewLang === s.code ? 'bg-violet-500 text-white' : 'bg-white text-violet-500 border border-violet-200 hover:bg-violet-100'}`}>
+                {s.label}
+              </button>
+            ))}
+          </div>
           <textarea value={previewText} onChange={e => setPreviewText(e.target.value)}
             rows={2} className="w-full bg-white rounded-xl px-3 py-2 text-xs border border-violet-200 resize-none"
             placeholder="输入试听文本..." />

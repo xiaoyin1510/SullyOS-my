@@ -2589,6 +2589,46 @@ export default {
       }
     }
 
+    // ========== 瑞幸 MCP 代理 (浏览器 CORS 兜底, 纯透传) ==========
+    // 前端 POST /mcp/luckin  + Authorization: Bearer <user_mcp_token>
+    // body 即 MCP JSON-RPC 报文 (initialize / tools/list / tools/call ...)
+    // Worker 不读不存 token, 只做 CORS + 转发 https://gwmcp.lkcoffee.com/order/user/mcp
+    // token 来源: 登录 https://open.lkcoffee.com 复制 (有效期约 1 个月)
+    if (url.pathname === '/mcp/luckin') {
+      if (request.method !== 'POST') {
+        return jsonResponse({ error: 'Method not allowed' }, { status: 405, origin });
+      }
+      const auth = request.headers.get('Authorization');
+      if (!auth) {
+        return jsonResponse({ error: 'Missing Authorization header (Luckin MCP token)' }, { status: 401, origin });
+      }
+      try {
+        const fwdHeaders = {
+          'Authorization': auth,
+          'Content-Type': request.headers.get('Content-Type') || 'application/json',
+          'Accept': request.headers.get('Accept') || 'application/json, text/event-stream',
+          'User-Agent': 'aetheros-mcp-proxy/1.0',
+        };
+        const sid = request.headers.get('Mcp-Session-Id') || request.headers.get('mcp-session-id');
+        if (sid) fwdHeaders['Mcp-Session-Id'] = sid;
+        const upstream = await fetch('https://gwmcp.lkcoffee.com/order/user/mcp', {
+          method: 'POST',
+          headers: fwdHeaders,
+          body: await request.text(),
+        });
+        const text = await upstream.text();
+        const respHeaders = new Headers(corsHeaders(origin));
+        const ct = upstream.headers.get('Content-Type');
+        if (ct) respHeaders.set('Content-Type', ct);
+        else respHeaders.set('Content-Type', 'application/json; charset=utf-8');
+        const upSid = upstream.headers.get('Mcp-Session-Id') || upstream.headers.get('mcp-session-id');
+        if (upSid) respHeaders.set('Mcp-Session-Id', upSid);
+        return new Response(text, { status: upstream.status, headers: respHeaders });
+      } catch (e) {
+        return jsonResponse({ error: 'Luckin MCP upstream fetch failed', detail: String(e && e.message || e) }, { status: 502, origin });
+      }
+    }
+
     // ========== 网易云音乐代理 (转发到 api-enhanced, 带边缘缓存 + 多上游容灾) ==========
     // 前端 POST /netease/<action> { ...body }
     // Worker 翻译成 api-enhanced 的 GET 参数形式并转发

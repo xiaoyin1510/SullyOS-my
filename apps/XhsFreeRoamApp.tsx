@@ -224,7 +224,11 @@ const XhsFreeRoamApp: React.FC = () => {
         if (!showDetail) return null;
         const a = showDetail;
         return (
-            <div className="fixed inset-0 z-50 bg-black/40 flex items-end justify-center" onClick={() => setShowDetail(null)}>
+            <div
+                className="fixed inset-0 z-50 bg-black/40 flex items-end justify-center"
+                style={{ paddingBottom: 'var(--safe-bottom)', paddingTop: 'var(--safe-top)' }}
+                onClick={() => setShowDetail(null)}
+            >
                 <div className="w-full max-w-lg bg-white rounded-t-3xl p-5 space-y-3 max-h-[75vh] overflow-y-auto animate-slide-up" onClick={e => e.stopPropagation()}>
                     <div className="flex items-center justify-between">
                         <div className="flex items-center gap-2">

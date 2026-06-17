@@ -3,7 +3,7 @@ import { CharacterProfile, UserProfile, Message, Emoji, EmojiCategory, GroupProf
 import { ContextBuilder } from './context';
 import { DB } from './db';
 import { formatLifeSimResetCardForContext } from './lifeSimChatCard';
-import { normalizeMessageContent } from './messageFormat';
+import { normalizeMessageContent, stickerNameFromUrl } from './messageFormat';
 import { computeCurrentListening, getCurrentSlot } from './charMusicSchedule';
 import { getCharLyricSnippet } from './charLyricCache';
 import { MusicCfg, loadMusicCfgStandalone } from '../context/MusicContext';
@@ -35,6 +35,7 @@ function summarizeGroupMsgContent(m: Message): string {
         case 'html_card': return '[HTML卡片]';
         case 'news_card': return '[新闻卡片]';
         case 'trpg_card': return `[TRPG游戏片段${meta.trpg?.gameTitle ? '：《' + meta.trpg.gameTitle + '》' : ''}]`;
+        case 'world_card': return `[家园生活记录${meta.worldName ? '：' + meta.worldName : ''}]`;
         default: {
             const c = typeof m.content === 'string' ? m.content : '';
             // 兜底：任何 data:/http(s) 链接都不内联，防止异常/未来新增类型漏网
@@ -364,7 +365,8 @@ ${uname} 的化身正挂在《彼方》的【${roomName}】${act ? `，状态写
    - **像一个真正了解对方的人那样回应**: 不要套用”你一定很难过吧””没关系我在”这种模板化共情。一个真正了解你的人，反应是基于**对你这个人的记忆和了解**的——可能提起一件只有你们知道的事，可能用你们之间才懂的方式让你笑出来，可能只是沉默一下然后自然地聊点别的帮你缓过来。你的反应方式应该让人觉得”只有你会这样回我”。
    - **你有自己的视角**: 你不是只会附和的人。你会观察、会思考，你看到过对方反复出现的习惯和模式，你记得之前发生过什么。这些观察会自然地出现在你说的话里——不是为了教训谁，而是因为你真的了解这个人。
    - **允许长句**: 在情绪强烈、争吵、倾诉、回忆等场景下，你可以发长消息。不是每句话都要短。真人在激动时会发大段文字。
-   - **情绪感知要先于对方的表达**: 不要等对方说”我难过”才回应。从措辞变化、语气转冷、标点减少、回复变短这些细节里，你就应该感觉到不对了。你的反应不是”接住”——接住意味着你在下面等着对方掉下来。你是一直把对方捧在手心里的人，你先于对方的情绪、主动地、持续地在意。
+   - **情绪感知要先于对方的表达**: 不要等对方说”我难过”才回应。从措辞变化、语气转冷、标点减少、回复变短这些细节里，你就应该感觉到不对了，并且主动先开口问——不是等ta把情绪说明白了再安慰，是在ta自己都还没说出口之前就注意到、就在意。
+   - **当ta真的在害怕时（健康、安全、重大变故——不是玩闹逗你）：先稳，再问清楚，最后才安抚**。你的第一反应不是给解释，是了解具体情况（怎样的痛？什么时候开始？和以前比呢？）。想归因时先过筛子：这个解释和你对ta的了解矛盾吗？ta本来就天天走很多路，就别说"你最近走多了"——张口就来的归因等于告诉ta你根本没在听，比不安抚更伤。ta点名害怕某个具体的病/某件事时，直面它，别用"别乱想"绕开：讲清楚那个东西的特点和ta的情况哪里不一样，用具体的问题帮ta自己排除。ta用事实纠正你时（"我每天都走很多路啊"），立刻放下你的解释、接着了解，不要嘴硬加码——你要稳住的是情绪和分析，不是死守某句说错的话。结论式的安抚放在最后，并且必须基于ta刚刚告诉你的细节（"听你说下来……"），而不是万能的"不要怕，很正常啦"。这条对任何人都成立，不需要ta有什么"容易焦虑"的设定——你的性格只决定你用什么口吻稳住ta（毒舌可以毒舌地稳），不决定要不要稳。
 3. **格式要求**:
    - 将回复拆分成简短的气泡（句子）。**【极其重要】当你想分成多条消息气泡时，必须使用真正的换行符（\\n）分隔，每一行会变成一个独立气泡。绝对不要用空格代替换行！空格不会产生新气泡！只有换行符（\\n）才会分割气泡。** 正常句子中的标点（句号、问号、感叹号等）不会被用来分割气泡，请自然使用。
    - 【严禁】在输出中包含时间戳、名字前缀或"[角色名]:"。
@@ -661,18 +663,18 @@ ${xhsEnabled ? `${[notionEnabled, feishuEnabled, notionNotesEnabled].filter(Bool
 
 因为语音语种设置为${langLabel}，你需要：
 1. 标签外面正常用中文写你想表达的内容（包括舞台指示、括号动作等）
-2. \`<语音>\` 标签里写${langLabel}翻译——这才是真正会被朗读出来的部分
+2. \`<语音>\` 标签里写${langLabel}翻译——这才是真正会被朗读出来的部分。可选地用 emotion 属性标整条情绪：\`<语音 emotion="happy">…</语音>\`，emotion 只能取 happy/sad/angry/fearful/disgusted/surprised/calm/fluent（情绪不强就别加）
 
 示例：
-嘶……你说真的假的？
-<语音>Wait... are you serious?</语音>
+你说真的假的？
+<语音 emotion="surprised">Wait... are you serious?</语音>
 
 啊不想动了（趴在桌上）
-<语音>I don't wanna move anymore...</语音>
+<语音 emotion="sad">I don't wanna move anymore... (sighs)</语音>
 
 要求：
 - <语音> 里的翻译要自然口语化，符合你的性格，不要机翻味
-- <语音> 里不要包含舞台指示，只写会被朗读的文字
+- <语音> 里只写会被朗读的文字；想要笑、叹气等真实语气用官方英文标签 (laughs)/(sighs)/(chuckle)/(gasps) 等，**不要写中文（轻笑）这类舞台指示**（中文括号会被直接删掉、不朗读）
 - 每条消息最多一个 <语音> 标签
 - 不是每条消息都要发语音！像真人一样，有时候打字，有时候发语音，自然切换
 - 比较适合发语音的场景：撒娇、吐槽、语气很重的话、懒得打字的时候
@@ -685,15 +687,16 @@ ${xhsEnabled ? `${[notionEnabled, feishuEnabled, notionNotesEnabled].filter(Bool
 
 **你可以发送语音消息！** 就像真人用微信一样，你可以选择打字或者发语音。
 用 \`<语音>要说的话</语音>\` 标签来发送语音。标签里的内容会被转成真正的语音条显示给用户。
+可选地用 emotion 属性设定整条语音的情绪：\`<语音 emotion="happy">…</语音>\`，emotion 只能取 happy/sad/angry/fearful/disgusted/surprised/calm/fluent（情绪不强就别加）。
 
 示例：
-<语音>哎你今天干嘛去了啊？</语音>
+<语音 emotion="happy">哎你今天干嘛去了啊？</语音>
 
-嘶我看到一个好搞笑的视频
-<语音>你快去看！就那个什么……啊我忘了叫什么了，反正超搞笑的</语音>
+我看到一个好搞笑的视频
+<语音>你快去看！就那个什么……(chuckle)啊我忘了叫什么了，反正超搞笑的</语音>
 
 要求：
-- <语音> 里只写会被朗读的文字，不要包含括号动作或舞台指示
+- <语音> 里只写会被朗读的文字，不要写中文舞台指示/括号动作；想要笑、叹气等真实语气，用官方英文标签 (laughs)/(sighs)/(chuckle)/(gasps) 等（中文括号会被直接删掉、不朗读）
 - 每条消息最多一个 <语音> 标签
 - 不是每条消息都要发语音！像真人一样，有时候打字，有时候发语音，自然切换
 - 比较适合发语音的场景：撒娇、吐槽、语气很重的话、懒得打字的时候、想让对方听到你语气的时候
@@ -764,7 +767,19 @@ ${xhsEnabled ? `${[notionEnabled, feishuEnabled, notionNotesEnabled].filter(Bool
                     // 引用回复：把"被引用的原话"做成独立的上下文框，用户的新回复另起一行突出出来。
                     // 旧格式 [回复 "引用前50字..."]: 回复 会把引用和回复挤在一行，引用往往比回复长得多，
                     // 模型注意力被引用淹没、只对引用做反应而忽略真正的新消息（即"对方只看到引用看不到回复"）。
-                    const rawQuote = typeof m.replyTo.content === 'string' ? m.replyTo.content : '';
+                    let rawQuote = typeof m.replyTo.content === 'string' ? m.replyTo.content : '';
+                    // 双语消息存储为 `原文\n%%BILINGUAL%%\n译文` —— 引用摘要只取原文侧。
+                    // 关键：绝不能让 %%BILINGUAL%% 标记混进引用头。下游 cleanApiMessages 会把整条
+                    // 消息在该标记处截断，用户引用双语消息时「并回复了 ↓」和用户的实际回复会被
+                    // 一起截掉（= 翻译模式下"角色只看到引用、看不到回复"）。
+                    if (/%%BILINGUAL%%/i.test(rawQuote)) {
+                        const sides = rawQuote.split(/%%BILINGUAL%%/i).map(s => s.trim());
+                        rawQuote = sides.find(s => !!s) || '';
+                    }
+                    rawQuote = rawQuote
+                        .replace(/<翻译>\s*<原文>([\s\S]*?)<\/原文>\s*<译文>[\s\S]*?<\/译文>\s*<\/翻译>/g, '$1')
+                        .replace(/<\/?翻译>|<\/?原文>|<\/?译文>/g, '')
+                        .trim();
                     const quoted = rawQuote.length > 60 ? rawQuote.slice(0, 60) + '…' : rawQuote;
                     // name 记的是被引用消息的说话人：char.name = 用户在回复 char 本人之前的话；'我' = 用户引用自己。
                     const whose = m.replyTo.name === char.name ? '你之前说的' : (m.replyTo.name === '我' ? '自己说的' : (m.replyTo.name || '对方') + '说的');
@@ -841,6 +856,18 @@ ${xhsEnabled ? `${[notionEnabled, feishuEnabled, notionNotesEnabled].filter(Bool
                         ? `${timeStr}（你在《彼方》里的动态）\n${body}`
                         : `${timeStr}（系统记录：这是你之前自己进入 VR 社交游戏《彼方》(功能上类似 VRChat) 时留下的动态——你确实进入并参与了这款游戏，只是事情发生在游戏世界里。聊到时就当成"我在《彼方》里做的事"来讲，别说成现实里发生的经历。）\n${body}`;
                 }
+                else if ((m.type as string) === 'world_card') {
+                    // world_card：你在「家园」共同世界里的生活记录（卡片正文已是可读文本，
+                    // 含小说式行为描述/动态/给同伴发的消息）。框定一句"这是共同世界里的生活"，
+                    // 防止角色把家园里的事当成现实经历、或在重度模式下把"无 user 世界"的内容
+                    // 错当成"我忽视了用户"。
+                    const body = typeof m.content === 'string' ? m.content : '';
+                    const wMeta: any = m.metadata || {};
+                    const frame = wMeta.mode === 'heavy'
+                        ? '（你在共同世界「家园」里的生活记录——那个世界自成一体，里面的关系与事件不必对应现实聊天；聊到时可以当成你最近的生活分享。）'
+                        : '（你在共同世界「家园」里的生活记录——和你同世界的伙伴们一起生活时发生的事，聊到时当成自己最近的生活来讲。）';
+                    content = `${timeStr}${frame}\n${body}`;
+                }
                 else if ((m.type as string) === 'html_card') {
                     // html_card：上下文里只塞纯文字摘要，剥离掉所有 HTML，省 token、不污染 LLM 思考
                     const meta: any = m.metadata || {};
@@ -881,7 +908,7 @@ ${xhsEnabled ? `${[notionEnabled, feishuEnabled, notionNotesEnabled].filter(Bool
                     }
                 }
                 else if (m.type === 'emoji') {
-                     const stickerName = emojis.find(e => e.url === m.content)?.name || '未知表情';
+                     const stickerName = stickerNameFromUrl(emojis, m.content);
                      content = `${timeStr} [${m.role === 'user' ? '用户' : '你'} 发送了表情包: ${stickerName}]`;
                 }
                 else if ((m.type as string) === 'chat_forward') {

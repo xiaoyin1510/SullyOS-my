@@ -17,7 +17,7 @@
 import {
     CharacterProfile, UserProfile, GroupProfile, RealtimeConfig, APIConfig,
     VRWorldNovel, VRCardMeta, VRRoomId, VRMusicRoomState, CharPlaylistSong, CharMusicReview,
-    VRGuestbookState, VRGuestbookMessage, VRLetter,
+    VRGuestbookState, VRGuestbookMessage, VRLetter, VRScript,
 } from '../../types';
 import { DB } from '../db';
 import { buildChatRequestPayload } from '../chatRequestPayload';
@@ -36,6 +36,7 @@ import {
     buildGymRoomTurn, parseGymOutput,
     buildPostOfficeRoomTurn, parsePostOfficeOutput,
     buildPostOfficeReadTurn, parsePostOfficeReadOutput,
+    buildTheaterRoomTurn, parseScriptOutput,
 } from './prompts';
 
 /** 记忆管线所需配置的最小形状（避免从 OSContext 反向 import 造成循环依赖）。 */
@@ -120,9 +121,9 @@ function nameLine(name: string, act: string): string {
     return t.startsWith(name) ? t : `${name}${act}`;
 }
 
-/** roll 一个房间：图书馆需有书；听歌房需有歌单或正在放歌；留言簿/娱乐室/邮局恒可去。 */
+/** roll 一个房间：图书馆需有书；听歌房需有歌单或正在放歌；留言簿/娱乐室/邮局/剧院恒可去。 */
 function rollRoom(char: CharacterProfile, novels: VRWorldNovel[], musicState: VRMusicRoomState | null, prefer?: VRRoomId): VRRoomId | null {
-    const pool: VRRoomId[] = ['guestbook', 'gym', 'postoffice'];
+    const pool: VRRoomId[] = ['guestbook', 'gym', 'postoffice', 'theater'];
     if (novels.length > 0) pool.push('library');
     if (gatherCharSongs(char).length > 0 || musicState?.nowPlaying) pool.push('music');
     if (prefer && pool.includes(prefer)) return prefer; // 指定的房间可用则去，否则回退随机
@@ -220,6 +221,13 @@ export async function runVRSession(deps: VRSessionDeps): Promise<VRSessionResult
         } else if (room.id === 'postoffice') {
             // 取一封"还没回过"的来信给角色看（有就可能回信，没有就写新信）
             const letters = await DB.getVRLetters();
+            // 写新信时可借的新闻热点（让"分享新闻/锐评热点"这类信有真实素材，否则模型只能瞎编）
+            let poHotTopics: string[] = [];
+            try {
+                const snap: any = await DB.getLatestHotNewsSnapshot();
+                const items: any[] = snap?.items || snap?.list || [];
+                poHotTopics = items.map(it => it?.title || it?.name || it?.desc).filter(Boolean);
+            } catch { /* 热点拉不到就不聊 */ }
             // 优先：认领自己寄出、已收到回信、还没读过的信 → 读回信、写感触、封存
             poReadTarget = letters.find(l => l.box === 'outbox' && l.status === 'archived'
                 && l.charId === char.id && (l.repliesReceived?.length || 0) > 0 && !l.reaction) || null;
@@ -230,7 +238,7 @@ export async function runVRSession(deps: VRSessionDeps): Promise<VRSessionResult
             if (forcedTarget) {
                 poTarget = forcedTarget;
                 poReadTarget = null; // 强制回信优先于"读自己收到的回信"
-                roomTurn = buildPostOfficeRoomTurn({ pen: forcedTarget.pen, content: forcedTarget.content }, char.name, true);
+                roomTurn = buildPostOfficeRoomTurn({ pen: forcedTarget.pen, content: forcedTarget.content }, char.name, true, poHotTopics);
             } else if (poReadTarget) {
                 roomTurn = buildPostOfficeReadTurn(
                     poReadTarget.content,
@@ -240,7 +248,7 @@ export async function runVRSession(deps: VRSessionDeps): Promise<VRSessionResult
             } else {
                 const targets = letters.filter(l => l.box === 'inbox' && (l.replyStatus ?? 'none') === 'none' && l.remoteLetterId);
                 poTarget = targets.length > 0 ? targets[Math.floor(Math.random() * targets.length)] : null;
-                roomTurn = buildPostOfficeRoomTurn(poTarget ? { pen: poTarget.pen, content: poTarget.content } : null, char.name);
+                roomTurn = buildPostOfficeRoomTurn(poTarget ? { pen: poTarget.pen, content: poTarget.content } : null, char.name, false, poHotTopics);
             }
             // 把"眼前这封信聊的是什么"塞进召回 query —— 邮局没有在场玩家，
             // 召回若只靠聊天历史就抓不到角色对信里话题的相关记忆/观点。
@@ -248,6 +256,9 @@ export async function runVRSession(deps: VRSessionDeps): Promise<VRSessionResult
             // 让角色召回"我当初为什么写这个"。截断到 200 字，够 embedding 抓语义即可。
             const recallLetter = (forcedTarget || poTarget)?.content || poReadTarget?.content;
             if (recallLetter) recallExtra.push(`一封信聊到：${recallLetter.slice(0, 200)}`);
+        } else if (room.id === 'theater') {
+            occupantsOf('theater').forEach(n => recallNames.add(n));
+            roomTurn = buildTheaterRoomTurn(occupantsOf('theater'), char.name);
         } else {
             // gym
             occupantsOf('gym').forEach(n => recallNames.add(n));
@@ -256,8 +267,17 @@ export async function runVRSession(deps: VRSessionDeps): Promise<VRSessionResult
 
         recallNames.delete(char.name);
         const namesArr = Array.from(recallNames).filter(Boolean);
+        // 名字权重加重：同场角色的名字在召回 query 里重复多遍，并显式问"我跟这些人的关系/印象"，
+        // 否则向量/BM25 容易被房间情景词淹没，召不回角色之间的过往与互相印象。
+        const namesBoost = namesArr.length > 0
+            ? [
+                `此刻在《彼方》同场的人：${namesArr.join('、')}。`,
+                `${namesArr.join(' ')} ${namesArr.join(' ')}`,             // 重复以抬高名字词频
+                `我对${namesArr.join('、')}的印象、我和${namesArr.join('、')}之间的关系与过往。`,
+            ].join('\n')
+            : '';
         const recallQueryHint = (namesArr.length > 0 || recallExtra.length > 0)
-            ? `${namesArr.length > 0 ? `此刻在《彼方》同场的人：${namesArr.join('、')}。` : ''}${recallExtra.length > 0 ? `相关：${recallExtra.join('、')}。` : ''}`
+            ? `${namesBoost}${recallExtra.length > 0 ? `\n相关：${recallExtra.join('、')}。` : ''}`.trim()
             : undefined;
 
         const payload = await buildChatRequestPayload({
@@ -425,6 +445,20 @@ export async function runVRSession(deps: VRSessionDeps): Promise<VRSessionResult
             cardLines = [`「彼方 · ${room.name}」`, nameLine(char.name, activity)];
             if (parsed.behavior) cardLines.push(`· ${parsed.behavior}`);
             meta = { vrCard: true, room: 'gym', activity, behavior: parsed.behavior };
+        } else if (room.id === 'theater') {
+            // === 剧院：角色即兴写一出舞台剧投稿 ===
+            const parsed = parseScriptOutput(aiContent);
+            const script: VRScript = {
+                id: genId('scr'), title: parsed.title, logline: parsed.logline,
+                roles: parsed.roles, body: parsed.body,
+                authorId: char.id, authorName: char.name, source: 'char', createdAt: Date.now(),
+            };
+            await DB.saveVRScript(script);
+            await updateCharacter(char.id, { vrState: { ...prevState, currentRoom: 'theater', lastActiveAt: Date.now() } });
+            activity = `创作了一出${parsed.logline ? `关于「${parsed.logline}」的` : ''}舞台剧《${parsed.title}》。`;
+            cardLines = [`「彼方 · ${room.name}」`, nameLine(char.name, activity)];
+            if (parsed.roles.length) cardLines.push(`登场：${parsed.roles.map(r => r.name).join('、')}`);
+            meta = { vrCard: true, room: 'theater', activity };
         } else if (room.id === 'postoffice' && poReadTarget) {
             // === 邮局：认领自己寄出的信、读陌生人的回信、写感触 → 封存 ===
             const parsed = parsePostOfficeReadOutput(aiContent);

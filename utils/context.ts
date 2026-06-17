@@ -261,6 +261,15 @@ export const ContextBuilder = {
             console.log(`🎭 [Context] Active buffs:`, JSON.stringify(char.activeBuffs || [], null, 2));
         }
 
+        // 7. 表达底线 (Anti-Filler) —— 全 App 通用的精简版防套话提示。
+        // 模型八股（空泛感慨、万能句式）是"没话找话"时的填充物，这里只做正向引导
+        // （去挖具体素材），不列任何禁语——把禁语写进提示词反而会激活它（粉色大象）。
+        // 完整方法版在 datePrompts 的 DIG_DEEPER_BLOCK（见面模式专用，可按角色开关）。
+        // 群聊流（groupOptions）跳过：多成员场景会重复注入 N 份，群聊侧暂不接入。
+        if (!groupOptions) {
+            context += `### 表达底线 (Anti-Filler)\n当你觉得"没什么可说"的时候，不要用空泛的感慨、万能句式或华丽排比去填充——那是没话找话，对方一眼就能看出来。素材永远比你以为的多：对方的用词、ta 怎么说的、ta 没说的部分、此刻的情境、你们的过去、你心里闪过的念头——挑一两条往深处走就够了。宁可一个具体的小细节，不要一句谁都能说的话。\n\n`;
+        }
+
         // Debug: warn about missing context sections
         const missing: string[] = [];
         if (!char.systemPrompt) missing.push('systemPrompt');
@@ -424,7 +433,7 @@ export const ContextBuilder = {
 
         // 4. 拼接：硬事实 → 意识流（可选）
         const preamble = `此刻你的心中盘旋着这些想法……\n`;
-        const footnote = `\n（不是台词，不用说出口——让它自然地染进语气和情绪里就好。）`;
+        const footnote = `\n（不是台词，不用说出口——让它影响你的语气和情绪就好。）`;
 
         let out = slotHeader;
         if (narrative) {

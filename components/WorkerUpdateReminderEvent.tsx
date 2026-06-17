@@ -112,8 +112,12 @@ export const WorkerUpdateReminderPopup: React.FC<WorkerUpdateReminderPopupProps>
         <div className="px-6 pb-4 space-y-3">
           <div className="bg-gradient-to-br from-indigo-50 to-sky-50 border border-indigo-100 rounded-2xl p-4 space-y-2">
             <p className="text-[13px] text-slate-700 leading-relaxed">
-              推送 worker 有新版本，需要你手动同步一下：
+              推送 worker 有新版本，需要你同步一下：
             </p>
+            <p className="text-[12px] text-slate-600 leading-relaxed">
+              <strong>Deno 部署</strong>：进 Playground 重新部署一次（保存即可），loader 会自动拉到最新代码。
+            </p>
+            <p className="text-[12px] text-slate-600 leading-relaxed"><strong>Cloudflare 部署</strong>：</p>
             <ol className="text-[12px] text-slate-600 leading-relaxed list-decimal pl-5 space-y-0.5">
               <li>点下面「复制最新代码」</li>
               <li>打开你的 Cloudflare worker 编辑界面</li>

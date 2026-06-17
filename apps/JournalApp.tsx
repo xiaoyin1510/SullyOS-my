@@ -7,6 +7,7 @@ import { ContextBuilder } from '../utils/context';
 import { processImage } from '../utils/file';
 import Modal from '../components/os/Modal';
 import { safeResponseJson } from '../utils/safeApi';
+import { normalizeMessageContent } from '../utils/messageFormat';
 import { injectMemoryPalace, ingestDiaryToPalace, type DiaryIngestResult } from '../utils/memoryPalace/pipeline';
 import { getRoomLabel } from '../utils/memoryPalace/types';
 import { Sparkle, Archive } from '@phosphor-icons/react';
@@ -409,8 +410,13 @@ const JournalApp: React.FC = () => {
 
             const recentMsgs = await DB.getMessagesByCharId(selectedChar.id);
             const contextLimit = 30;
+            // 用统一的 normalizeMessageContent 把消息转成可读文本，绝不能直接塞 m.content：
+            // score_card（含上一次交换日记同步进来的卡片）的 content 是整段 JSON，里面带
+            // charAvatar 的 base64 data URL + 双方日记全文。重新生成时这张卡已在历史里，
+            // 直接 dump 原始 content 会把 base64 头像和 JSON 结构整个灌进 prompt，
+            // 造成 token 异常膨胀。normalize 后日记卡会被压成一行摘要，不再泄漏 base64/JSON。
             const recentContext = recentMsgs.slice(-contextLimit).map(m => {
-                const content = m.type === 'image' ? '[User sent an image]' : m.content;
+                const content = normalizeMessageContent(m, selectedChar.name, userProfile.name);
                 return `[${new Date(m.timestamp).toLocaleTimeString()}] ${m.role === 'user' ? 'User' : 'You'}: ${content}`;
             }).join('\n');
 

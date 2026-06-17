@@ -6,6 +6,8 @@ import { ProactiveChat } from '../utils/proactiveChat';
 import { VRScheduler } from '../utils/vrWorld/scheduler';
 import { runVRSession } from '../utils/vrWorld/runSession';
 import { VR_DEFAULT_INTERVAL_MIN } from '../utils/vrWorld/constants';
+import { WorldScheduler } from '../utils/worldHome/scheduler';
+import { runWorldEpisode, rerollWorldCharBeat } from '../utils/worldHome/engine';
 import { ChatParser } from '../utils/chatParser';
 import { safeFetchJson } from '../utils/safeApi';
 import { recordApiCall, setApiCallAmbientContext } from '../utils/apiCallLog';
@@ -21,6 +23,11 @@ import { LocalNotifications } from '@capacitor/local-notifications';
 import { Capacitor } from '@capacitor/core';
 import { formatBytes } from '../utils/format';
 import { isEmotionEvalSkipped } from '../utils/devDebug';
+// 备份用：把存在 localStorage 的本机配置随导出一起带走（键名须与 importFullData 对齐）
+import { exportPostOfficeLocal } from '../utils/vrWorld/postOffice';
+import { exportWorldHomeLocal } from '../utils/worldHome/localBackup';
+import { exportLuckinLocal } from '../utils/luckinMcpClient';
+import { exportMcdLocal } from '../utils/mcdMcpClient';
 
 const normalizeProactiveAiContent = (raw: string): string => {
   let cleaned = raw;
@@ -727,9 +734,11 @@ export const OSProvider: React.FC<{ children: React.ReactNode }> = ({ children }
           const [resource, config] = args;
           
           const urlStr = String(resource);
-          
+          const fetchStartedAt = Date.now();
+
           try {
               const response = await originalFetch(...args);
+              const durationMs = Date.now() - fetchStartedAt;
 
               // 「API 调用记录」统一记录入口：所有 /chat/completions（裸 fetch + safeFetchJson
               // 内部 fetch 都会经过这里）都记一笔。meta 优先取调用方挂在 init 上的 __sullyMeta
@@ -746,10 +755,10 @@ export const OSProvider: React.FC<{ children: React.ReactNode }> = ({ children }
                       usageClone.text().then((t) => {
                           let parsed: any = undefined;
                           try { parsed = JSON.parse(t); } catch { /* 流式/非 JSON：无 usage，照样记 */ }
-                          recordApiCall({ url: urlStr, body, status, ok, response: parsed, meta });
-                      }).catch(() => recordApiCall({ url: urlStr, body, status, ok, meta }));
+                          recordApiCall({ url: urlStr, body, status, ok, response: parsed, meta, durationMs });
+                      }).catch(() => recordApiCall({ url: urlStr, body, status, ok, meta, durationMs }));
                   } else {
-                      recordApiCall({ url: urlStr, body, status, ok, meta });
+                      recordApiCall({ url: urlStr, body, status, ok, meta, durationMs });
                   }
               }
 
@@ -759,13 +768,24 @@ export const OSProvider: React.FC<{ children: React.ReactNode }> = ({ children }
                       try {
                           const clone = response.clone();
                           const text = await clone.text();
+                          // 把发出去的请求体摘要也记上 —— 排查"只有点单(带工具)报错"必须看到 model/参数/tools/消息结构
+                          let reqSummary = '';
+                          try {
+                              const b = (config as any)?.body;
+                              if (typeof b === 'string') {
+                                  const j = JSON.parse(b);
+                                  const toolNames = Array.isArray(j.tools) ? j.tools.map((t: any) => t?.function?.name).filter(Boolean) : [];
+                                  const roles = Array.isArray(j.messages) ? j.messages.map((m: any) => m.role + (m.tool_calls ? '(tool_calls)' : '')).join(',') : '';
+                                  reqSummary = `\n--- Request ---\nmodel: ${j.model}\ntemperature: ${j.temperature} | top_p: ${j.top_p} | reasoning_effort: ${j.reasoning_effort} | thinking: ${j.thinking ? 'on' : 'off'}\ntools(${toolNames.length}): ${toolNames.join(', ')}\nmessages(${(j.messages || []).length}) roles: ${roles}`;
+                              }
+                          } catch { /* 解析不了就算了 */ }
                           setSystemLogs(prev => [{
                               id: `log-${Date.now()}`,
                               timestamp: Date.now(),
                               type: 'network',
                               source: 'API Request',
                               message: `HTTP ${response.status} Error`,
-                              detail: `URL: ${urlStr}\nResponse: ${text.substring(0, 500)}`
+                              detail: `URL: ${urlStr}\nResponse: ${text.substring(0, 500)}${reqSummary}`
                           }, ...prev.slice(0, 49)]); // Keep last 50
                       } catch (e) {
                           setSystemLogs(prev => [{
@@ -783,7 +803,7 @@ export const OSProvider: React.FC<{ children: React.ReactNode }> = ({ children }
           } catch (err: any) {
               // Network Failure
               if (urlStr.includes('/chat/completions')) {
-                  recordApiCall({ url: urlStr, body: (config as any)?.body, ok: false, meta: (config as any)?.__sullyMeta });
+                  recordApiCall({ url: urlStr, body: (config as any)?.body, ok: false, meta: (config as any)?.__sullyMeta, durationMs: Date.now() - fetchStartedAt });
               }
               setSystemLogs(prev => [{
                   id: `log-${Date.now()}`,
@@ -969,14 +989,27 @@ export const OSProvider: React.FC<{ children: React.ReactNode }> = ({ children }
 
         await loadSettings();
 
+        // 用 allSettled 而非 all：早期 Promise.all 只要任意一个 store 读取 reject，
+        // 整批加载就全挂 → setCharacters / setWorldbooks 都不执行 → 角色和世界书"凭空消失"
+        // （数据其实还在 IndexedDB 里，只是没读进 state）→ Chat 渲染时 char 为 undefined 直接崩。
+        // 改成各 store 独立失败，一个坏掉不连累其余，最大限度保住用户数据。
+        const settle = async <T,>(p: Promise<T>, label: string, fallback: T): Promise<T> => {
+            try {
+                return await p;
+            } catch (e) {
+                console.error(`Data init: 读取 ${label} 失败，已降级`, e);
+                return fallback;
+            }
+        };
+
         const [dbChars, dbThemes, dbUser, dbGroups, dbWorldbooks, dbNovels, dbSongs] = await Promise.all([
-            DB.getAllCharacters(),
-            DB.getThemes(),
-            DB.getUserProfile(),
-            DB.getGroups(),
-            DB.getAllWorldbooks(),
-            DB.getAllNovels(),
-            DB.getAllSongs()
+            settle(DB.getAllCharacters(), 'characters', [] as CharacterProfile[]),
+            settle(DB.getThemes(), 'themes', [] as ChatTheme[]),
+            settle(DB.getUserProfile(), 'userProfile', null as UserProfile | null),
+            settle(DB.getGroups(), 'groups', [] as GroupProfile[]),
+            settle(DB.getAllWorldbooks(), 'worldbooks', [] as Worldbook[]),
+            settle(DB.getAllNovels(), 'novels', [] as NovelBook[]),
+            settle(DB.getAllSongs(), 'songs', [] as SongSheet[])
         ]);
 
         let finalChars = dbChars;
@@ -1103,6 +1136,9 @@ export const OSProvider: React.FC<{ children: React.ReactNode }> = ({ children }
       root.style.setProperty('--primary-hue', String(h));
       root.style.setProperty('--primary-sat', `${s}%`);
       root.style.setProperty('--primary-lightness', `${l}%`);
+
+      // 桌面皮肤：写到 <html data-skin>，供全局 CSS（index.html）与组件读取。
+      root.dataset.skin = theme.skin || 'default';
   }, [theme]);
 
   // --- Update: Handle Scheduled Messages with Unread Flags & Web Notifications ---
@@ -1122,6 +1158,10 @@ export const OSProvider: React.FC<{ children: React.ReactNode }> = ({ children }
 
           for (const char of characters) {
               try {
+                  // 用户正在 DateApp 里和这个角色见面 —— 角色之前排好的定时消息
+                  // ([schedule_message] 指令) 这轮先压着不投递（不删不读），
+                  // 等用户离开见面界面后，下一轮 5s 检查会自然送达。
+                  if (activeAppRef.current === AppID.Date && activeCharIdScheduleRef.current === char.id) continue;
                   const dueMessages = await DB.getDueScheduledMessages(char.id);
                   if (cancelled) return;
                   if (dueMessages.length > 0) {
@@ -1400,6 +1440,15 @@ export const OSProvider: React.FC<{ children: React.ReactNode }> = ({ children }
               return;
           }
 
+          // 用户正在 DateApp 里和这个角色见面 —— 人就在对方眼前，再发一条
+          // 线上主动消息既出戏又显得对见面毫不知情。本轮静默跳过；
+          // lastFire 已在调度层记录，下个周期会重新评估。
+          if (activeAppRef.current === AppID.Date && activeCharIdScheduleRef.current === charId) {
+              drainQueuedProactive();
+              console.log(`🔕 [Proactive/Global] Skipped for ${char.name}: 正在见面 (DateApp active)`);
+              return;
+          }
+
           // Determine which API to use
           const pCfg = char.proactiveConfig;
           const useSecondary = pCfg?.useSecondaryApi && pCfg.secondaryApi?.baseUrl;
@@ -1433,11 +1482,26 @@ export const OSProvider: React.FC<{ children: React.ReactNode }> = ({ children }
 
               // 2. Save hidden system hint
               const userName = currentUserProfile?.name || '对方';
+
+              // 见面（DateApp）感知：见面消息可能已被记忆宫殿高水位归档，上面 hwm 过滤后的
+              // recentMsgs 会漏判，所以单独用 includeProcessed=true 读最后一条真实消息。
+              // 刚见完面还发"你好久没找我了"会显得对见面毫不知情，换成见面后的语境。
+              const lastRealMsgRaw = (await DB.getRecentMessagesByCharId(charId, 10, true))
+                  .filter(m => !m.metadata?.proactiveHint)
+                  .pop();
+              const DATE_AFTERGLOW_MS = 3 * 60 * 60 * 1000;
+              const justMetOffline = lastRealMsgRaw?.metadata?.source === 'date'
+                  && (now.getTime() - lastRealMsgRaw.timestamp) < DATE_AFTERGLOW_MS;
+
+              const hintContent = justMetOffline
+                  ? `[系统提示（非${userName}发言）: 现在是 ${timeStr}。你和${userName}刚刚在线下见过面（如果上下文里有标着 [约会] 的内容，那就是你们见面时发生的事），现在你们暂时分开了，你拿起手机想给${userName}发条消息。请基于刚才的见面来发——可以回味见面里的某个细节、补一句当时没说出口的话、关心${userName}到家了没，或者就是刚分开就有点想念。绝对不要表现得好像很久没联系，更不要对刚才的见面毫不知情。一两句话就好。]`
+                  : `[系统提示（非${userName}发言）: 现在是 ${timeStr}。${timeSinceUser ? `${userName}已经 ${timeSinceUser} 没有找你说话了。` : ''}这是系统给你的一次主动发消息机会——${userName}并没有在跟你说话，是你想主动找${userName}。像真人一样随意地发条消息吧，比如：随手拍了张照片想分享、刚看到个有趣的事想说、突然想到个冷知识、吐槽今天的天气/食物/见闻、或者就是单纯想找${userName}聊几句。不要刻意，不要像在"汇报近况"，就像你真的拿起手机随手发了条消息。一两句话就好。${timeSinceUser && parseInt(timeSinceUser) > 2 ? `（${userName}挺久没找你了，你也可以表达想念、好奇${userName}在干嘛、或者小小地抱怨一下。）` : ''}]`;
+
               await DB.saveMessage({
                   charId,
                   role: 'user',
                   type: 'text',
-                  content: `[系统提示（非${userName}发言）: 现在是 ${timeStr}。${timeSinceUser ? `${userName}已经 ${timeSinceUser} 没有找你说话了。` : ''}这是系统给你的一次主动发消息机会——${userName}并没有在跟你说话，是你想主动找${userName}。像真人一样随意地发条消息吧，比如：随手拍了张照片想分享、刚看到个有趣的事想说、突然想到个冷知识、吐槽今天的天气/食物/见闻、或者就是单纯想找${userName}聊几句。不要刻意，不要像在"汇报近况"，就像你真的拿起手机随手发了条消息。一两句话就好。${timeSinceUser && parseInt(timeSinceUser) > 2 ? `（${userName}挺久没找你了，你也可以表达想念、好奇${userName}在干嘛、或者小小地抱怨一下。）` : ''}]`,
+                  content: hintContent,
                   metadata: { proactiveHint: true, hidden: true }
               });
 
@@ -1785,10 +1849,69 @@ export const OSProvider: React.FC<{ children: React.ReactNode }> = ({ children }
               .map(c => ({ charId: c.id, intervalMinutes: c.vrState?.intervalMinutes || VR_DEFAULT_INTERVAL_MIN }))
       );
 
+      // 「家园」演绎 —— 引擎跑在全局：用户不在家园界面（可能正在和别人私聊）时，
+      // 观测/离线 tick 触发的一轮链式演绎照样完成并注入 world_card。
+      const runWorld = async (worldId: string, trigger: 'observe' | 'tick') => {
+          if (!userProfileRef.current) return;
+          try {
+              const world = await DB.getWorld(worldId);
+              if (!world) return;
+              await runWorldEpisode({
+                  world,
+                  characters: charactersRef.current,
+                  apiConfig: apiConfigRef.current,
+                  userProfile: userProfileRef.current,
+                  groups: groupsRef.current,
+                  realtimeConfig: realtimeConfigRef.current,
+                  memoryPalaceConfig: memoryPalaceConfigRef.current,
+                  trigger,
+              });
+          } catch (e) {
+              console.error('[WorldHome] runWorld error', e);
+          }
+      };
+      WorldScheduler.onTrigger((worldId, trigger) => { void runWorld(worldId, trigger); });
+
+      // 单个角色重 roll（家园 WorldView 派发 world-reroll-request 事件，带 worldId/charId/direction）
+      const onRerollRequest = async (e: Event) => {
+          const d = (e as CustomEvent).detail || {};
+          if (!d.worldId || !d.charId || !userProfileRef.current) return;
+          try {
+              const world = await DB.getWorld(d.worldId);
+              if (!world) return;
+              await rerollWorldCharBeat({
+                  world,
+                  characters: charactersRef.current,
+                  apiConfig: apiConfigRef.current,
+                  userProfile: userProfileRef.current,
+                  groups: groupsRef.current,
+                  realtimeConfig: realtimeConfigRef.current,
+                  memoryPalaceConfig: memoryPalaceConfigRef.current,
+                  trigger: 'observe',
+                  episodeId: d.episodeId,
+                  charId: d.charId,
+                  direction: d.direction,
+              });
+          } catch (err) {
+              console.error('[WorldHome] reroll error', err);
+          }
+      };
+      window.addEventListener('world-reroll-request', onRerollRequest as EventListener);
+      // 调度表存 localStorage 不随备份迁移，按 IndexedDB 里的世界配置对账
+      void DB.getWorlds()
+          .then(worlds => WorldScheduler.reconcile(
+              worlds
+                  .filter(w => (w.offlineTickSlots?.length || 0) > 0)
+                  .map(w => ({ worldId: w.id, slots: w.offlineTickSlots! }))
+          ))
+          .catch(() => {});
+
       return () => {
           // Cleanup: detach proactive listeners when OSContext unmounts (unlikely but safe)
           ProactiveChat.onTrigger(() => {});
           VRScheduler.onTrigger(() => {});
+          WorldScheduler.onTrigger(() => {});
+          window.removeEventListener('world-reroll-request', onRerollRequest as EventListener);
       };
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [isDataLoaded]);
@@ -2472,7 +2595,10 @@ export const OSProvider: React.FC<{ children: React.ReactNode }> = ({ children }
               'daily_schedule', 'memory_batches',
               'pixel_home_assets', 'pixel_home_layouts',
               // 「彼方」虚拟世界各房间 store —— 早期导出清单漏了，导致备份不含房间数据
-              'vr_novels', 'vr_annotations', 'cc_custom_parts', 'vr_music', 'vr_guestbook', 'vr_letters', 'vr_settings'
+              // 剧院的 vr_scripts(投稿剧本) / vr_plays(角色演过的话剧) / vr_presets(写作风格预设)
+              // 之前也漏在这份清单外，导出后这三类剧院数据全丢（导入端其实早已支持恢复）
+              'vr_novels', 'vr_annotations', 'cc_custom_parts', 'vr_music', 'vr_guestbook', 'vr_letters', 'vr_settings',
+              'vr_scripts', 'vr_plays', 'vr_presets'
           ];
 
           if (mode === 'full') {
@@ -2621,6 +2747,14 @@ export const OSProvider: React.FC<{ children: React.ReactNode }> = ({ children }
                   }
                   return Object.keys(flags).length > 0 ? flags : undefined;
               })() : undefined,
+
+              // 本机 localStorage 配置（导入端 importFullData 已支持恢复，之前导出漏发导致丢失）
+              //  · 瑞幸 / 麦当劳 MCP 的点单 token + 启用状态（用户说的「那个码」）
+              //  · 邮局身份、家园全局 API + 文风收藏
+              vrPostOffice: (mode === 'text_only' || mode === 'full') ? exportPostOfficeLocal() : undefined,
+              worldHomeLocal: (mode === 'text_only' || mode === 'full') ? exportWorldHomeLocal() : undefined,
+              luckinLocal: (mode === 'text_only' || mode === 'full') ? exportLuckinLocal() : undefined,
+              mcdLocal: (mode === 'text_only' || mode === 'full') ? exportMcdLocal() : undefined,
           };
 
           const totalSteps = storesToProcess.length + 3;
@@ -2833,6 +2967,9 @@ export const OSProvider: React.FC<{ children: React.ReactNode }> = ({ children }
                   case 'cc_custom_parts': backupData.customCreatorParts = processedData; break;
                   case 'vr_letters': backupData.vrLetters = processedData; break;
                   case 'vr_settings': backupData.vrSettings = processedData; break;
+                  case 'vr_scripts': backupData.vrScripts = processedData; break;
+                  case 'vr_plays': backupData.vrStagedPlays = processedData; break;        // 角色演过的话剧
+                  case 'vr_presets': backupData.vrPresets = processedData; break;
                   // 单例 store：导入端期望单个对象（取首条），非数组
                   case 'vr_music': backupData.vrMusicRoom = Array.isArray(processedData) ? (processedData[0] || undefined) : (processedData || undefined); break;
                   case 'vr_guestbook': backupData.vrGuestbook = Array.isArray(processedData) ? (processedData[0] || undefined) : (processedData || undefined); break;

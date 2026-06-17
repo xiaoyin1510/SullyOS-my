@@ -4,8 +4,9 @@
 //   2. 在 DEV_DEBUG_CAPTURE_CATEGORIES 加一行（面板会自动多出一个开关）
 //   3. 写一个语义化的 appendDevDebugXxxLog 薄封装（见文件末尾 appendDevDebugApiLog / appendDevDebugInstantPushLog）
 // 其余存储 / 脱敏 / 限容 / 导出逻辑全部通用，不用改。
-// 分类按「来源通道」切：api = 普通聊天直发模型；instant-push = 经 worker 的通道事件。
-export type DevDebugCaptureCategory = 'api' | 'instant-push';
+// 分类按「来源通道」切：api = 普通聊天直发模型；instant-push = 经 worker 的通道事件；
+// lifecycle = 页面前后台/网络状态变化（排查「请求等着等着就 NetworkError」时跟 api 类对时间线）。
+export type DevDebugCaptureCategory = 'api' | 'instant-push' | 'lifecycle';
 
 export interface DevDebugCaptureCategoryMeta {
     key: DevDebugCaptureCategory;
@@ -25,6 +26,11 @@ export const DEV_DEBUG_CAPTURE_CATEGORIES: DevDebugCaptureCategoryMeta[] = [
         key: 'instant-push',
         title: 'IP',
         detail: 'Instant Push 通道：经 worker 的 LLM 交换 + SSE 投递结果（超时 / 收到 / 失败）。',
+    },
+    {
+        key: 'lifecycle',
+        title: '前后台',
+        detail: '页面前后台 / 焦点 / 网络状态变化（visibilitychange、focus/blur、pagehide/pageshow、online/offline、freeze/resume），用来跟 api 类对时间线，判断请求失败是不是切后台导致的。',
     },
 ];
 
@@ -248,9 +254,12 @@ export function isEmotionEvalSkipped(): boolean {
 }
 
 export function isCaptureEnabled(category: DevDebugCaptureCategory): boolean {
-    // 「关闭」按钮 = 强制下线整个调试系统（任意分支）。这里也必须挡住捕获，
-    // 否则面板已收起，业务代码却还往 localStorage 里写带 url/status 的日志条目（隐私债）。
-    if (devDebugForceClosed) return false;
+    // 跟可用性绑定：面板看不见就别录。覆盖三种「隐身但 flag 还在 localStorage 里」的场景：
+    //   1. 关闭按钮（devDebugForceClosed=true）
+    //   2. prod 刷新后（manualUnlock 重置为 false，但 captureEnabled 还在存档里）
+    //   3. master 构建（__BUILD_BADGE_VISIBLE__=false，未解锁）
+    // 不挡的话用户看不到面板还在偷偷写带 url/status 的日志条目——隐私债。
+    if (!isDevDebugAvailable()) return false;
     const flags = readDevDebugFlags();
     // 总开关关掉时一律不抓，哪怕该类别勾着。
     return flags.captureEnabled && flags.captureLogs.includes(category);
@@ -410,6 +419,19 @@ export interface DevDebugHttpLogInput {
     requestBody?: unknown;
     response?: unknown;
     error?: unknown;
+    /** 本次请求从发起到成功 / 报错的耗时 ms（重试场景 = 最后一次 attempt 的耗时）。 */
+    durationMs?: number;
+}
+
+/** 请求体字符数：messages 折叠后日志里看不出请求多大，这个数字补上「体积」维度。 */
+function measureRequestChars(body: unknown): number | undefined {
+    if (body === undefined || body === null) return undefined;
+    if (typeof body === 'string') return body.length;
+    try {
+        return JSON.stringify(body)?.length;
+    } catch {
+        return undefined;
+    }
 }
 
 /** 通用 HTTP 日志薄封装；按 category 落到对应类别，请求体 / 错误统一整形。 */
@@ -422,6 +444,8 @@ function appendDevDebugHttpLog(category: DevDebugCaptureCategory, input: DevDebu
             url: input.url,
             method: input.method,
             status: input.status,
+            durationMs: input.durationMs,
+            requestChars: measureRequestChars(input.requestBody),
             request: parseRequestBody(input.requestBody),
             response: input.response,
             error: input.error
@@ -442,6 +466,47 @@ export function appendDevDebugApiLog(input: DevDebugHttpLogInput): void {
 /** instant-push 类：经 worker 的通道事件（消费点 activeMsgRuntime / instantPushClient）。 */
 export function appendDevDebugInstantPushLog(input: DevDebugHttpLogInput): void {
     appendDevDebugHttpLog('instant-push', input);
+}
+
+// ===== lifecycle 类：页面前后台 / 焦点 / 网络状态变化 =====
+// 用途：跟 api 类条目对时间线。比如某条 API 在 NetworkError 前后紧挨着
+// 「visibilitychange → hidden」，基本可以断定是切后台 / 锁屏把 fetch 冻死的。
+// 监听器常驻（事件本身低频、回调零成本），抓不抓由 appendDevDebugLog 的
+// isCaptureEnabled('lifecycle') 门禁决定——没勾时回调直接 return。
+
+let lifecycleCaptureInstalled = false;
+
+function appendLifecycleEvent(event: string, extra?: Record<string, unknown>): void {
+    appendDevDebugLog('lifecycle', {
+        label: `[lifecycle] ${event}`,
+        data: {
+            event,
+            visibility: typeof document !== 'undefined' ? document.visibilityState : 'n/a',
+            online: typeof navigator !== 'undefined' ? navigator.onLine : undefined,
+            ...extra,
+        },
+    });
+}
+
+/** 安装 lifecycle 事件捕获（幂等，App 启动时挂一次）。 */
+export function installDevDebugLifecycleCapture(): void {
+    if (lifecycleCaptureInstalled) return;
+    if (typeof window === 'undefined' || typeof document === 'undefined') return;
+    lifecycleCaptureInstalled = true;
+
+    document.addEventListener('visibilitychange', () => {
+        appendLifecycleEvent(`visibilitychange → ${document.visibilityState}`);
+    });
+    window.addEventListener('focus', () => appendLifecycleEvent('window focus'));
+    window.addEventListener('blur', () => appendLifecycleEvent('window blur'));
+    // pagehide.persisted = true 表示进了 bfcache（页面被冻结而非销毁）
+    window.addEventListener('pagehide', (e) => appendLifecycleEvent('pagehide', { persisted: (e as PageTransitionEvent).persisted }));
+    window.addEventListener('pageshow', (e) => appendLifecycleEvent('pageshow', { persisted: (e as PageTransitionEvent).persisted }));
+    window.addEventListener('online', () => appendLifecycleEvent('online'));
+    window.addEventListener('offline', () => appendLifecycleEvent('offline'));
+    // Page Lifecycle API（Chromium 系才有）：freeze = 后台冻结，resume = 解冻
+    document.addEventListener('freeze', () => appendLifecycleEvent('freeze'));
+    document.addEventListener('resume', () => appendLifecycleEvent('resume'));
 }
 
 export interface DevDebugLogger {

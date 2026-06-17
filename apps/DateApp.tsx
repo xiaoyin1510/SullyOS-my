@@ -3,9 +3,8 @@ import React, { useState, useEffect, useRef, useCallback } from 'react';
 import { useOS } from '../context/OSContext';
 import { DB } from '../utils/db';
 import { CharacterProfile, Message, DateState } from '../types';
-import { ContextBuilder } from '../utils/context';
-import { ChatPrompts } from '../utils/chatPrompts';
-import { injectMemoryPalace, processNewMessages, mergePalaceFragmentsIntoMemories, getMemoryPalaceHighWaterMark } from '../utils/memoryPalace/pipeline';
+import { DatePrompts, ApiMessage } from '../utils/datePrompts';
+import { processNewMessages, mergePalaceFragmentsIntoMemories, getMemoryPalaceHighWaterMark } from '../utils/memoryPalace/pipeline';
 import type { PipelineResult } from '../utils/memoryPalace/pipeline';
 import { incrementDigestRound, runCognitiveDigestion } from '../utils/memoryPalace';
 import { safeResponseJson } from '../utils/safeApi';
@@ -96,25 +95,21 @@ const DateApp: React.FC = () => {
 
     const formatTime = () => `${virtualTime.hours.toString().padStart(2, '0')}:${virtualTime.minutes.toString().padStart(2, '0')}`;
 
-    // Improved Time Gap Logic
-    const getTimeGapHint = (lastMsgTimestamp: number | undefined): string => {
-        if (!lastMsgTimestamp) return '这是你们的初次互动。';
-        const now = Date.now();
-        const diffMs = now - lastMsgTimestamp;
-        const diffMins = Math.floor(diffMs / (1000 * 60));
-        const diffHours = Math.floor(diffMs / (1000 * 60 * 60));
-        const currentHour = new Date().getHours();
-        const isNight = currentHour >= 23 || currentHour <= 6;
-
-        if (diffMins < 5) return ''; 
-        if (diffMins < 60) return `[系统提示: 距离上次互动: ${diffMins} 分钟。]`;
-        if (diffHours < 6) {
-            if (isNight) return `[系统提示: 距离上次互动: ${diffHours} 小时。现在是深夜/清晨。]`;
-            return `[系统提示: 距离上次互动: ${diffHours} 小时。]`;
-        }
-        if (diffHours < 24) return `[系统提示: 距离上次互动: ${diffHours} 小时。]`;
-        const days = Math.floor(diffHours / 24);
-        return `[系统提示: 距离上次互动: ${days} 天。]`;
+    // peek / send / reroll 共用的 LLM 调用（提示词构建统一在 utils/datePrompts.ts）
+    const callLLM = async (messages: ApiMessage[], temperature: number): Promise<string> => {
+        const response = await fetch(`${apiConfig.baseUrl.replace(/\/+$/, '')}/chat/completions`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${apiConfig.apiKey}` },
+            body: JSON.stringify({
+                model: apiConfig.model,
+                messages,
+                temperature,
+                stream: apiConfig.stream ?? false,
+            })
+        });
+        if (!response.ok) throw new Error('API Error');
+        const data = await safeResponseJson(response);
+        return data.choices[0].message.content;
     };
 
     // --- Resume / Start Logic ---
@@ -178,57 +173,14 @@ const DateApp: React.FC = () => {
 
         try {
             const msgs = await DB.getMessagesByCharId(c.id, true);
-            const limit = c.contextLimit || 500;
-            const peekLimit = Math.min(limit, 50);
-            const lastMsg = msgs[msgs.length - 1];
-            const gapHint = getTimeGapHint(lastMsg?.timestamp);
-
-            const recentMsgs = msgs.slice(-peekLimit).map(m => {
-                const content = m.type === 'image' ? '[User sent an image]' : m.content;
-                const source = m.metadata?.source === 'call' ? '[通话]' : m.metadata?.source === 'date' ? '[约会]' : '[聊天]';
-                return `${m.role} ${source}: ${content}`;
-            }).join('\n');
-
-            const timeStr = `${virtualTime.day} ${formatTime()}`;
-            const baseContext = ContextBuilder.buildCoreContext(c, userProfile, false);
-
-            // 根据时间间隔选择合适的分隔符
-            const contextSeparator = gapHint
-                ? `\n\n--- [TIME SKIP: ${gapHint}] ---\n\n`
-                : `\n\n--- [SCENE CONTINUATION: 刚刚还在聊天，现在来到了面对面的场景] ---\n\n`;
-
-            const peekInstructions = `
-### 场景：感知 (Sense Presence)
-当前时间: ${timeStr}
-时间上下文: ${gapHint}
-
-### 任务
-你现在并不在和用户直接对话。用户正在悄悄靠近你所在的地点。
-请用**第三人称**描写一段话。
-描述：${c.name} 此时此刻正在做什么？周围环境是怎样的？状态如何？
-
-### 逻辑检查
-1. **上下文连贯性**: 参考 [最近记录]（注意消息来源标签：[聊天]是文字聊天、[约会]是面对面、[通话]是语音通话）。如果有 [TIME SKIP] 且间隔很久，开启新场景；如果是 [SCENE CONTINUATION]，说明刚刚还在聊天，**必须**自然衔接最近的聊天话题和情绪状态，不要无视之前的对话内容。
-2. **状态一致性**: ${gapHint.includes('很久') ? '因为很久没见，可能在发呆、忙碌或者有点落寞。' : '根据最近的聊天内容和情绪来决定当前状态。如果刚聊完，角色的状态应该与聊天内容相呼应。'}
-3. **描写风格**: 电影感，沉浸式，细节丰富。不要输出任何前缀，直接输出描写内容。`;
-
-            const response = await fetch(`${apiConfig.baseUrl.replace(/\/+$/, '')}/chat/completions`, {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${apiConfig.apiKey}` },
-                body: JSON.stringify({
-                    model: apiConfig.model,
-                    messages: [
-                        { role: "system", content: baseContext },
-                        { role: "user", content: `[最近记录 (Previous Context)]:${recentMsgs}${contextSeparator}${peekInstructions}\n\n(Start sensing...)` }
-                    ],
-                    temperature: apiConfig.temperature ?? 0.85,
-                    stream: apiConfig.stream ?? false,
-                })
+            const emojis = await DB.getEmojis();
+            const { messages } = DatePrompts.buildPeekPayload({
+                char: c,
+                userProfile,
+                allMsgs: msgs,
+                emojis,
             });
-
-            if (!response.ok) throw new Error('Failed to sense presence');
-            const data = await safeResponseJson(response);
-            const content = data.choices[0].message.content;
+            const content = await callLLM(messages, apiConfig.temperature ?? 0.85);
             setPeekStatus(content);
 
         } catch (e: any) {
@@ -342,78 +294,16 @@ const DateApp: React.FC = () => {
         const dateFiltered = allMsgs.filter(m => m.metadata?.source === 'date').sort((a,b) => a.timestamp - b.timestamp);
         setDateMessages(dateFiltered);
 
-        const limit = char.contextLimit || 500;
-
-        // 与 chat app 完全对齐的历史构建：
-        // 1. 开了记忆宫殿 → 按高水位线过滤掉已被向量记忆替代的旧消息（chat 是在 DB 层做的；这里 allMsgs
-        //    用 includeProcessed=true 因为 dateFiltered 显示 + injectMemoryPalace 还要全集，所以手动过一遍）
-        // 2. 复用 ChatPrompts.buildMessageHistory：emoji / html_card / mcd_card / chat_forward / score_card
-        //    等都会被压成短摘要，不再像旧版 mapper 那样把 m.content 原样塞，避免 prompt 暴涨。
-        // 3. 排除最后一条（刚保存的 user msg），下面单独追加带 System Note 的版本。
-        const hwm = parseInt(localStorage.getItem(`mp_lastMsgId_${char.id}`) || '0', 10);
-        const palaceFiltered = hwm > 0 ? allMsgs.filter(m => m.id > hwm) : allMsgs;
-        const historyForBuild = palaceFiltered.slice(0, -1);
         const emojis = await DB.getEmojis();
-        const { apiMessages: historyMsgs } = ChatPrompts.buildMessageHistory(historyForBuild, limit, char, userProfile || ({} as any), emojis);
-
-        await injectMemoryPalace(char, allMsgs);
-        let systemPrompt = ContextBuilder.buildCoreContext(char, userProfile);
-        const REQUIRED_EMOTIONS = ['normal', 'happy', 'angry', 'sad', 'shy'];
-        const dateEmotions = [...REQUIRED_EMOTIONS, ...(char.customDateSprites || [])];
-
-        // Explicitly tell AI about the scene
-        systemPrompt += `### [Visual Novel Mode: 视觉小说脚本模式]
-你正在与用户进行**面对面**的互动。这不是聊天，是一场真实的见面。
-
-### 核心规则：一行一念 (One Line per Beat)
-前端解析器基于**换行符**来分割气泡。
-1. **禁止混写**: 严禁在同一行里既写动作又写带引号的台词。
-2. **情绪标签**: **每一行都必须以** \`[emotion]\` **开头**，表示该行的表情立绘。情绪随内容变化——台词温柔就用 [happy]，动作紧张就用 [shy]，语气冲就用 [angry]。**不要整段只用一个情绪，要逐行根据语境切换。** 仅限使用以下情绪: ${dateEmotions.join(', ')}。不要使用任何不在此列表中的标签。
-3. **格式**: 台词用双引号 **"..."**，动作/叙述直接写（不加引号）。
-
-### ⭐ 动作与叙述行的写法
-你不是在列清单，你是在写一个正在发生的场景。每一行动作/叙述都应该让人感受到**此时此刻的空气**。
-
-**具体要求**：
-- 写出**感官**：光线怎么落的、空气什么味道、皮肤什么触感、周围什么声音
-- 写出**节奏**：动作之间有停顿、有犹豫、有呼吸，不要一口气做完三个动作
-- 写出**情绪的痕迹**：不要说"他很紧张"，而是写他的手指在桌面上画了一道看不见的线
-- 让每一行都有**画面**，像电影里的一个镜头
-
-❌ **不要这样写**（只用一个情绪 + 干巴巴的动作罗列）：
-[normal] 把手放下，看向你。
-走到你身边，坐下来。
-拿起杯子，喝了一口水。
-
-✅ **要这样写**（每行标注情绪 + 有呼吸感的叙述）：
-[normal] 指尖从发梢滑落，垂在身侧。视线转过来的时候并不急，像是刚好、又像是故意。
-[shy] "……你一直在看我吗？"
-[happy] 嘴角的弧度藏不住，像是被戳中了什么小心思。
-[normal] 脚步踩在木地板上的声音很轻。在你旁边坐下来，衣料带过一缕还没散尽的冷风。
-
-### 场景上下文
-1. **Location**: 你们现在**面对面**。
-2. **Context**: 参考历史记录。如果刚刚才看到开场白（Opening），请自然接话。
-`;
-
-        const response = await fetch(`${apiConfig.baseUrl.replace(/\/+$/, '')}/chat/completions`, {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${apiConfig.apiKey}` },
-            body: JSON.stringify({
-                model: apiConfig.model,
-                messages: [
-                    { role: 'system', content: systemPrompt },
-                    ...historyMsgs,
-                    { role: 'user', content: `${text}\n\n(System Note: 严格遵守 VN 格式。每一行都要以 [emotion] 开头，根据内容逐行切换情绪标签，不要整段只用同一个。叙述行写出场景的呼吸感，不要罗列动作。)` }
-                ],
-                temperature: apiConfig.temperature ?? 0.85,
-                stream: apiConfig.stream ?? false,
-            })
+        const { messages } = await DatePrompts.buildSessionPayload({
+            char,
+            userProfile,
+            allMsgs,
+            emojis,
+            userText: text,
+            variant: 'send',
         });
-
-        if (!response.ok) throw new Error('API Error');
-        const data = await safeResponseJson(response);
-        const content = data.choices[0].message.content;
+        const content = await callLLM(messages, apiConfig.temperature ?? 0.85);
 
         // 3. Save AI Response
         await DB.saveMessage({ charId: char.id, role: 'assistant', type: 'text', content: content, metadata: { source: 'date' } });
@@ -444,50 +334,18 @@ const DateApp: React.FC = () => {
         
         if (!lastUserMsg || lastUserMsg.role !== 'user') throw new Error("Context lost");
 
-        // 3. Call API logic（与 handleSendMessage 同款：水位线 + 复用 ChatPrompts.buildMessageHistory）
-        const limit = char.contextLimit || 500;
-        const hwm = parseInt(localStorage.getItem(`mp_lastMsgId_${char.id}`) || '0', 10);
-        const palaceFiltered = hwm > 0 ? validMsgs.filter(m => m.id > hwm) : validMsgs;
-        const historyForBuild = palaceFiltered.slice(0, -1);
+        // 3. Call API logic（与 handleSendMessage 共用 buildSessionPayload，只差 variant）
         const emojis = await DB.getEmojis();
-        const { apiMessages: historyMsgs } = ChatPrompts.buildMessageHistory(historyForBuild, limit, char, userProfile || ({} as any), emojis);
-
-        await injectMemoryPalace(char, allMsgs);
-        let systemPrompt = ContextBuilder.buildCoreContext(char, userProfile);
-        const REQUIRED_EMOTIONS_R = ['normal', 'happy', 'angry', 'sad', 'shy'];
-        const dateEmotionsR = [...REQUIRED_EMOTIONS_R, ...(char.customDateSprites || [])];
-        systemPrompt += `### [Visual Novel Mode: 视觉小说脚本模式]
-你正在与用户进行**面对面**的互动。
-
-### 格式规则
-1. **禁止混写**: 严禁在同一行里既写动作又写带引号的台词。
-2. **情绪标签**: \`[emotion]\` (放在行首)。**仅限使用以下情绪**: ${dateEmotionsR.join(', ')}。不要使用不在列表中的标签。
-3. **格式**: 台词用双引号 **"..."**，动作/叙述直接写。
-
-### ⭐ 动作与叙述行的写法
-不要罗列动作。写出感官细节、停顿和呼吸感，让每一行都像电影镜头——有画面、有空气、有温度。
-用细微的肢体语言暗示情绪，不要直接说"开心""紧张"。
-`;
-
-        const response = await fetch(`${apiConfig.baseUrl.replace(/\/+$/, '')}/chat/completions`, {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${apiConfig.apiKey}` },
-            body: JSON.stringify({
-                model: apiConfig.model,
-                messages: [
-                    { role: 'system', content: systemPrompt },
-                    ...historyMsgs,
-                    { role: 'user', content: `${lastUserMsg.content}\n\n(System Note: Reroll. 用不同的角度重写，叙述行保持场景感。)` }
-                ],
-                // Reroll 略调高温度求多样性，但绝不低于用户配置的基线。
-                temperature: Math.max(apiConfig.temperature ?? 0.85, 0.9),
-                stream: apiConfig.stream ?? false,
-            })
+        const { messages } = await DatePrompts.buildSessionPayload({
+            char,
+            userProfile,
+            allMsgs: validMsgs,
+            emojis,
+            userText: lastUserMsg.content,
+            variant: 'reroll',
         });
-
-        if (!response.ok) throw new Error('API Error');
-        const data = await safeResponseJson(response);
-        const content = data.choices[0].message.content;
+        // Reroll 略调高温度求多样性，但绝不低于用户配置的基线。
+        const content = await callLLM(messages, Math.max(apiConfig.temperature ?? 0.85, 0.9));
 
         await DB.saveMessage({ charId: char.id, role: 'assistant', type: 'text', content: content, metadata: { source: 'date' } });
 

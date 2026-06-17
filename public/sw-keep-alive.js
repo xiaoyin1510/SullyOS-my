@@ -40,7 +40,7 @@ function concatBytes(...chunks) {
   return out;
 }
 
-// node_modules/.pnpm/@rei-standard+amsg-sw@2.3.0/node_modules/@rei-standard/amsg-sw/dist/index.mjs
+// node_modules/.pnpm/@rei-standard+amsg-sw@2.3.1/node_modules/@rei-standard/amsg-sw/dist/index.mjs
 var REI_SW_DB_NAME = "rei-sw";
 var REI_SW_DB_STORE = "request-outbox";
 var REI_SW_MULTIPART_STORE = "multipart-pending";
@@ -214,9 +214,14 @@ async function dispatchBusinessPayload(sw2, payload, defaults, onNotificationSet
     const notification = createNotificationFromPayload(payload, defaults);
     if (notification) {
       notificationWork.push(
-        sw2.registration.showNotification(notification.title, notification.options).then(() => {
-          notificationState.shown = true;
-        })
+        sw2.registration.showNotification(notification.title, notification.options).then(
+          () => {
+            notificationState.shown = true;
+          },
+          (error) => {
+            console.error("[rei-standard-amsg-sw] showNotification rejected:", error);
+          }
+        )
       );
     }
   }

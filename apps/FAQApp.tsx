@@ -10,6 +10,7 @@ import {
     CHANGELOG_2026_05_17,
     CHANGELOG_2026_05_27,
     CHANGELOG_2026_06_05,
+    CHANGELOG_2026_06_14,
 } from '../components/UpdateNotificationEvent';
 
 const FAQ_DATA = [
@@ -95,6 +96,14 @@ interface ChangelogEntry {
 }
 
 const CHANGELOG_ENTRIES: ChangelogEntry[] = [
+    {
+        id: CHANGELOG_2026_06_14,
+        title: '2026 年 6 月 14 日 · 家园上线',
+        subtitle: '小屋翻新 · 「家园」多角色大世界（真实时间 / 模拟时间二选一）· 瑞幸咖啡点单',
+        date: '2026-06-14',
+        src: 'changelogs/2026-6-14.html',
+        accent: 'from-violet-100 to-purple-100 border-violet-200',
+    },
     {
         id: CHANGELOG_2026_06_05,
         title: '2026 年 6 月 5 日 · 彼方上线',

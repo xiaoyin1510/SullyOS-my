@@ -5,6 +5,8 @@ import React, { useRef, useState } from 'react';
 import { Message, ChatTheme } from '../../types';
 import { tryParseLifeSimResetCard } from '../../utils/lifeSimChatCard';
 import McdCard from './McdCard';
+import LuckinCard from './LuckinCard';
+import LuckinCheckoutCard from './LuckinCheckoutCard';
 
 // 思考链卡片支持的 4 种风格预设 — 同时被 MessageItem 与 ThinkingChainSettingsModal 复用
 export type ThinkingChainStyleId = 'echo' | 'whisper' | 'minimal' | 'custom';
@@ -283,9 +285,9 @@ const ForwardCard: React.FC<{
 
             {/* Expanded Full-screen Overlay */}
             {expanded && (
-                <div className="fixed inset-0 z-[100] bg-slate-50 flex flex-col animate-fade-in" onClick={(e) => e.stopPropagation()}>
+                <div className="fixed inset-0 z-[100] bg-slate-50 flex flex-col animate-fade-in" style={{ paddingBottom: 'var(--safe-bottom)' }} onClick={(e) => e.stopPropagation()}>
                     {/* Header */}
-                    <div className="pt-[calc(env(safe-area-inset-top)+0.75rem)] pb-3 px-4 bg-white border-b border-slate-100 shrink-0 flex items-center gap-3">
+                    <div className="pt-[calc(var(--safe-top)+0.75rem)] pb-3 px-4 bg-white border-b border-slate-100 shrink-0 flex items-center gap-3">
                         <button onClick={() => setExpanded(false)} className="p-2 -ml-2 rounded-full hover:bg-slate-100 text-slate-600">
                             <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" strokeWidth={2} stroke="currentColor" className="w-5 h-5"><path strokeLinecap="round" strokeLinejoin="round" d="M15.75 19.5 8.25 12l7.5-7.5" /></svg>
                         </button>
@@ -661,7 +663,7 @@ interface MessageItemProps {
     voiceData?: { url: string; originalText: string; spokenText?: string; lang?: string };
     voiceLoading?: boolean;
     isVoicePlaying?: boolean;
-    onPlayVoice?: () => void;
+    onPlayVoice?: (id: number) => void;
     // Chat layout customization
     avatarShape?: 'circle' | 'rounded' | 'square';
     avatarSize?: 'small' | 'medium' | 'large';
@@ -676,6 +678,9 @@ interface MessageItemProps {
     /** 麦当劳菜单卡里点了"发送给角色"时调用 */
     onMcdSendCart?: (items: import('./McdCard').McdCartItem[]) => void;
     onMcdCandidate?: (item: import('./McdCard').McdCartItem) => void;
+    /** 瑞幸菜单卡 (与麦当劳同构) */
+    onLuckinSendCart?: (items: import('./LuckinCard').LuckinCartItem[]) => void;
+    onLuckinCandidate?: (item: import('./LuckinCard').LuckinCartItem) => void;
     /** 思考链卡片视觉与交互 */
     thinkingChainOptions?: {
         styleId?: ThinkingChainStyleId;
@@ -715,6 +720,8 @@ const MessageItem = React.memo(({
     pendingIndicator = true,
     onMcdSendCart,
     onMcdCandidate,
+    onLuckinSendCart,
+    onLuckinCandidate,
     thinkingChainOptions,
 }: MessageItemProps) => {
     const isUser = m.role === 'user';
@@ -1430,6 +1437,68 @@ const MessageItem = React.memo(({
         );
     }
 
+    if (m.type === 'luckin_card') {
+        const meta = m.metadata || {};
+        const kind = meta.luckinCardKind;
+        // 来自小程序的卡片 (proposal / cart / candidate) → 主聊天里只渲染一张"刷卡"占位
+        if (kind === 'proposal' || kind === 'cart' || kind === 'candidate' || meta.fromLuckinMiniApp) {
+            const label = kind === 'proposal' ? '推荐了几样'
+                : kind === 'cart' ? '想下单的购物车'
+                : kind === 'candidate' ? '问问意见'
+                : '瑞幸卡片';
+            const summary = kind === 'proposal' && Array.isArray(meta.luckinProposal?.items)
+                ? `${meta.luckinProposal.items.length} 件: ${meta.luckinProposal.items.slice(0, 3).map((i: any) => i.name).join(' / ')}${meta.luckinProposal.items.length > 3 ? '…' : ''}`
+                : kind === 'cart' && Array.isArray(meta.luckinCartItems)
+                ? `${meta.luckinCartItems.length} 件: ${meta.luckinCartItems.slice(0, 3).map((i: any) => i.name).join(' / ')}${meta.luckinCartItems.length > 3 ? '…' : ''}`
+                : kind === 'candidate' && meta.luckinCandidate?.name
+                ? `「${meta.luckinCandidate.name}」`
+                : '';
+            return commonLayout(
+                <div className="w-60 rounded-2xl overflow-hidden border border-blue-200 shadow-sm bg-gradient-to-br from-blue-50 to-sky-50 select-none">
+                    <div className="flex items-center gap-2 px-3 py-2 bg-gradient-to-r from-blue-600 to-sky-500">
+                        <span className="text-lg">🦌</span>
+                        <div className="flex-1 min-w-0">
+                            <div className="text-[10px] text-white/70 leading-none">瑞幸卡片</div>
+                            <div className="text-[11px] font-bold text-white leading-tight">{label}</div>
+                        </div>
+                    </div>
+                    <div className="px-3 py-2 text-[10px] text-slate-500 leading-snug min-h-[28px]">
+                        {summary || '在瑞幸小程序里查看完整内容'}
+                    </div>
+                    <div className="px-3 pb-2 text-[9px] text-blue-700/60 italic">
+                        💳 已记录在瑞幸记录里
+                    </div>
+                </div>
+            );
+        }
+        // 结账卡 (聊天点单 previewOrder 的终点): 可改数量 + 直接扫码支付
+        if (kind === 'checkout' && meta.luckinToolResult) {
+            return commonLayout(
+                <LuckinCheckoutCard
+                    deptId={meta.luckinToolArgs?.deptId}
+                    args={meta.luckinToolArgs}
+                    preview={meta.luckinToolResult}
+                    loc={meta.luckinLoc}
+                />
+            );
+        }
+        // 工具结果卡 (门店/商品/订单) 或老的 luckin_card → 走 LuckinCard 渲染
+        return commonLayout(
+            <LuckinCard
+                toolName={meta.luckinToolName || m.content || 'luckin_tool'}
+                args={meta.luckinToolArgs}
+                result={meta.luckinToolResult}
+                error={meta.luckinToolError}
+                rawText={meta.luckinToolRawText}
+                kind={kind || 'generic'}
+                onSendCart={onLuckinSendCart}
+                onCandidate={onLuckinCandidate}
+                cartItems={meta.luckinCartItems}
+                candidateItem={meta.luckinCandidate}
+            />
+        );
+    }
+
     if (m.type === 'vr_card') {
         const md: any = m.metadata || {};
         const roomNameMap: Record<string, string> = {
@@ -1485,6 +1554,74 @@ const MessageItem = React.memo(({
                     <div className="px-3 py-1.5 border-t border-white/10 flex items-center justify-between">
                         <span className="text-[9px] text-indigo-300/60 italic">{md.userBoardPost ? '你发布到留言墙' : 'Ta 独自度过的时间'}</span>
                         <span className="text-[9px] text-amber-200/70 font-bold tracking-wide">{md.userBoardPost ? '彼方' : '＋记忆'}</span>
+                    </div>
+                </div>
+            </div>
+        );
+        return commonLayout(card);
+    }
+
+    if (m.type === 'world_card') {
+        const md: any = m.metadata || {};
+        const timeStr = new Date(m.timestamp).toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit' });
+        const narrative: string = md.narrative || '';
+        const panel: Record<string, any> = (md.statusPanel && typeof md.statusPanel === 'object') ? md.statusPanel : {};
+        const posts: string[] = Array.isArray(md.phonePosts) ? md.phonePosts : [];
+        const card = (
+            <div className="w-64">
+                <div
+                    className="relative rounded-2xl overflow-hidden border border-violet-200/70 shadow-[0_6px_20px_rgba(150,130,200,0.22)]"
+                    style={{ background: 'linear-gradient(160deg,#fbf7ff 0%,#f1ebfa 55%,#eae3f6 100%)' }}
+                >
+                    {/* 顶部淡紫光晕 + 月亮 + 星点（浅色系，和彼方的深色拉开差异） */}
+                    <div className="absolute -top-6 -right-4 w-24 h-24 rounded-full pointer-events-none" style={{ background: 'radial-gradient(circle,rgba(214,196,244,.55),transparent 70%)' }} />
+                    <div className="absolute top-2.5 right-3.5 w-5 h-5 rounded-full pointer-events-none" style={{ background: 'radial-gradient(circle at 38% 35%,#ffffff,#d9cdf0 72%)', boxShadow: '0 0 10px 2px rgba(200,180,245,.5)' }} />
+                    <div className="absolute inset-0 pointer-events-none opacity-60" style={{ backgroundImage: 'radial-gradient(1px 1px at 20% 22%,#c9b8ec,transparent),radial-gradient(1px 1px at 60% 16%,#e7c9f0,transparent),radial-gradient(1px 1px at 40% 34%,#bcd0f0,transparent)' }} />
+                    {/* 头部：家园 · 世界名 · 剧情时间 */}
+                    <div className="relative px-3 pt-2.5 pb-2 flex items-center gap-2 border-b border-violet-200/50">
+                        <span className="text-base leading-none text-violet-400" style={{ filter: 'drop-shadow(0 1px 3px rgba(180,150,230,.5))' }}>⌂</span>
+                        <div className="flex-1 min-w-0">
+                            <div className="text-[9px] tracking-[0.25em] text-violet-400/90 font-bold uppercase">家园 · {md.storyTime || '生活记录'}</div>
+                            <div className="text-[12px] text-[#5b4b7a] font-semibold truncate font-serif">{md.worldName || '共同世界'}</div>
+                        </div>
+                        <span className="text-[9px] text-violet-400/60">{timeStr}</span>
+                    </div>
+                    {/* 行为描述 */}
+                    <div className="relative px-3 py-2.5">
+                        <p className="text-[11px] text-[#6a5790] mb-1">
+                            <span className="font-bold text-rose-400">{charName || 'Ta'}</span>
+                            {md.location ? ` 在${md.location}` : ''}{md.mood ? ` · ${md.mood}` : ''}
+                        </p>
+                        {narrative && (
+                            <p className="text-[12px] leading-[1.6] text-[#4a3f63] whitespace-pre-wrap max-h-44 overflow-y-auto no-scrollbar">
+                                {narrative}
+                            </p>
+                        )}
+                        {/* 数值面板 */}
+                        {Object.keys(panel).length > 0 && (
+                            <div className="mt-2 flex flex-wrap gap-1">
+                                {Object.entries(panel).map(([k, v]) => (
+                                    <span key={k} className="text-[9px] px-1.5 py-0.5 rounded-full bg-violet-100/80 text-violet-600 border border-violet-200/70">
+                                        {k} {String(v)}
+                                    </span>
+                                ))}
+                            </div>
+                        )}
+                        {/* 发的动态 */}
+                        {posts.length > 0 && (
+                            <div className="mt-2 space-y-1">
+                                {posts.map((p, i) => (
+                                    <div key={i} className="text-[11px] leading-snug text-violet-700/85 pl-2 border-l-2 border-rose-300/70">
+                                        {p}
+                                    </div>
+                                ))}
+                            </div>
+                        )}
+                    </div>
+                    {/* 页脚 */}
+                    <div className="relative px-3 py-1.5 border-t border-violet-200/50 flex items-center justify-between">
+                        <span className="text-[9px] text-violet-400/70 italic">Ta 在那个世界的生活</span>
+                        <span className="text-[9px] text-rose-400/80 font-bold tracking-wide">＋记忆</span>
                     </div>
                 </div>
             </div>
@@ -1627,11 +1764,33 @@ const MessageItem = React.memo(({
                     style={{ height: 200 }}
                     onLoad={(e) => {
                         try {
-                            const f = e.currentTarget;
+                            const f = e.currentTarget as HTMLIFrameElement & { __htmlCardRO?: ResizeObserver };
                             const doc = f.contentDocument;
                             if (!doc || !doc.body) return;
-                            const h = Math.min(800, Math.max(60, doc.body.scrollHeight + 4));
-                            f.style.height = h + 'px';
+                            // 量内容真实高度并把 iframe 调成等高，避免内部滚动。
+                            // 上限放宽到 2400，足够长卡片完整展开；真正超长的才会兜底滚动。
+                            const fit = () => {
+                                try {
+                                    const root = doc.documentElement;
+                                    const body = doc.body;
+                                    const natural = Math.max(
+                                        body.scrollHeight, body.offsetHeight,
+                                        root ? root.scrollHeight : 0,
+                                    );
+                                    const h = Math.min(2400, Math.max(60, natural + 4));
+                                    f.style.height = h + 'px';
+                                } catch { /* 同源读不到时静默 */ }
+                            };
+                            fit();
+                            // 交互卡片（:checked 展开 / 折叠）、动画、字体晚到都会改变高度，
+                            // 用 ResizeObserver 持续跟随，让高度始终自适应而不是只量一次。
+                            f.__htmlCardRO?.disconnect();
+                            if (typeof ResizeObserver !== 'undefined') {
+                                const ro = new ResizeObserver(() => fit());
+                                ro.observe(doc.body);
+                                if (doc.documentElement) ro.observe(doc.documentElement);
+                                f.__htmlCardRO = ro;
+                            }
                         } catch { /* 同源也读不到时静默 */ }
                     }}
                 />
@@ -2023,6 +2182,7 @@ const MessageItem = React.memo(({
         .replace(/\s*\[(?:聊天|通话|约会)\]\s*/g, '\n')   // source tags leaked from history context
         .replace(/\[\[(?:QU[OA]TE|引用)[：:][\s\S]*?\]\]/g, '')  // residual double-bracket quotes (incl. typos & Chinese)
         .replace(/\[(?:QU[OA]TE|引用)[：:][^\]]*\]/g, '')     // residual single-bracket quotes (incl. typos & Chinese)
+        .replace(/\[[^\[\]\n「」]{0,24}引用了[^\[\]\n「」]{0,24}「[^」\n]*?」[^\[\]\n]{0,24}\]\s*/g, '')  // imitated history render [xx引用了xx说的「…」，并回复了 ↓]
         .replace(/\[回复\s*[""\u201C][^""\u201D]*?[""\u201D](?:\.{0,3})\]\s*[：:]?\s*/g, '')  // [回复 "content"]: format
         // Residual action/system tags that may have leaked through
         .replace(/\[\[(?:ACTION|RECALL|SEARCH|DIARY|READ_DIARY|FS_DIARY|FS_READ_DIARY|SEND_EMOJI|DIARY_START|DIARY_END|FS_DIARY_START|FS_DIARY_END)[:\s][\s\S]*?\]\]/g, '')
@@ -2037,6 +2197,9 @@ const MessageItem = React.memo(({
 
     const rawContent = m.content;
 
+    // 引用快照原样存着 %%BILINGUAL%% 等原始标记（双语消息），预览前先清洗
+    const replyPreview = m.replyTo ? stripJunk(m.replyTo.content) : '';
+
     // Parse %%BILINGUAL%% for bilingual display (langA = "选" language, langB = "译" language)
     const bilingualIdx = rawContent.toLowerCase().indexOf('%%bilingual%%');
     const hasBilingual = bilingualIdx !== -1;
@@ -2049,6 +2212,10 @@ const MessageItem = React.memo(({
 
     // Check if raw content has a <语音> tag (voice-only message that hasn't been TTS'd yet)
     const hasVoiceTag = !isUser && /<[语語]音>[\s\S]*?<\/[语語]音>/.test(m.content);
+    // Spoken text inside the <语音> tag — lets the placeholder bar offer a 转文字 toggle
+    // even when no audio was synthesized (e.g. character has no MiniMax voice configured),
+    // so fake voice messages stay readable just like real ones.
+    const voiceTagText = hasVoiceTag ? (m.content.match(/<[语語]音>([\s\S]*?)<\/[语語]音>/)?.[1]?.trim() || '') : '';
     const hasVoiceContent = voiceData?.url || voiceLoading || hasVoiceTag;
     // Don't render empty bubbles (e.g. messages that were just "---"), unless voice data exists or pending
     if (!displayContent && !hasVoiceContent) return null;
@@ -2092,7 +2259,7 @@ const MessageItem = React.memo(({
             {m.replyTo && (
                 <div className="relative z-10 mb-1 text-[10px] bg-black/5 p-1.5 rounded-md border-l-2 border-current opacity-60 flex flex-col gap-0.5 max-w-full overflow-hidden">
                     <span className="font-bold opacity-90 truncate">{m.replyTo.name}</span>
-                    <span className="truncate italic">"{m.replyTo.content.length > 10 ? m.replyTo.content.slice(0, 10) + '...' : m.replyTo.content}"</span>
+                    <span className="truncate italic">"{replyPreview.length > 10 ? replyPreview.slice(0, 10) + '...' : replyPreview}"</span>
                 </div>
             )}
 
@@ -2144,7 +2311,7 @@ const MessageItem = React.memo(({
                     {voiceData?.url ? (
                         <div className="max-w-[260px]">
                             <button
-                                onClick={(e) => { e.stopPropagation(); e.preventDefault(); onPlayVoice?.(); }}
+                                onClick={(e) => { e.stopPropagation(); e.preventDefault(); onPlayVoice?.(m.id); }}
                                 className="group flex items-center gap-2.5 w-full px-3 py-2 rounded-2xl transition-all duration-300 active:scale-[0.97] select-none"
                                 style={{
                                     background: isVoicePlaying
@@ -2257,22 +2424,54 @@ const MessageItem = React.memo(({
                             <span className="text-[10px] shrink-0 animate-pulse" style={{ color: vbText || '#94a3b8' }}>合成中</span>
                         </div>
                     ) : hasVoiceTag ? (
-                        /* Voice tag exists in content but TTS hasn't been generated yet (e.g. app restart, or auto-TTS pending) */
-                        <button
-                            onClick={(e) => { e.stopPropagation(); e.preventDefault(); onPlayVoice?.(); }}
-                            className="flex items-center gap-2 px-3 py-2 max-w-[200px] rounded-2xl active:scale-[0.97] transition-transform"
-                            style={{ background: vbBg || 'linear-gradient(135deg, rgba(0,0,0,0.03) 0%, rgba(0,0,0,0.06) 100%)', border: '1px solid rgba(0,0,0,0.05)' }}
-                        >
-                            <div className="shrink-0 w-7 h-7 rounded-full flex items-center justify-center" style={{ backgroundColor: vbBg ? 'rgba(255,255,255,0.25)' : 'rgba(148,163,184,0.2)' }}>
-                                <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 20 20" fill={vbBtn || '#64748b'} className="w-3 h-3 ml-0.5"><path d="M6.3 2.84A1.5 1.5 0 0 0 4 4.11v11.78a1.5 1.5 0 0 0 2.3 1.27l9.344-5.891a1.5 1.5 0 0 0 0-2.538L6.3 2.841Z" /></svg>
+                        /* Voice tag exists in content but no audio yet — either TTS is still
+                           pending (app restart / auto-TTS) or the character has no MiniMax voice
+                           configured. Offer a 转文字 toggle here too so the text stays readable,
+                           aligning fake voice messages with real ones. */
+                        <div className="max-w-[260px]">
+                            <div
+                                className="flex items-center gap-2 px-3 py-2 rounded-2xl"
+                                style={{ background: vbBg || 'linear-gradient(135deg, rgba(0,0,0,0.03) 0%, rgba(0,0,0,0.06) 100%)', border: '1px solid rgba(0,0,0,0.05)' }}
+                            >
+                                <button
+                                    onClick={(e) => { e.stopPropagation(); e.preventDefault(); onPlayVoice?.(m.id); }}
+                                    className="shrink-0 w-7 h-7 rounded-full flex items-center justify-center active:scale-[0.92] transition-transform"
+                                    style={{ backgroundColor: vbBg ? 'rgba(255,255,255,0.25)' : 'rgba(148,163,184,0.2)' }}
+                                >
+                                    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 20 20" fill={vbBtn || '#64748b'} className="w-3 h-3 ml-0.5"><path d="M6.3 2.84A1.5 1.5 0 0 0 4 4.11v11.78a1.5 1.5 0 0 0 2.3 1.27l9.344-5.891a1.5 1.5 0 0 0 0-2.538L6.3 2.841Z" /></svg>
+                                </button>
+                                <div className="flex-1 flex items-center gap-[3px] h-5 overflow-hidden">
+                                    {[4, 10, 6, 14, 8, 12, 5, 11, 7, 13, 4, 9, 6, 11, 5, 8, 10, 7, 12, 6].map((h, i) => (
+                                        <div key={i} className="w-[2.5px] rounded-full" style={{ height: `${Math.max(2, h * 0.4)}px`, backgroundColor: vbWave ? vbWave + '60' : `rgba(148, 163, 184, ${0.25 + (h / 14) * 0.35})` }} />
+                                    ))}
+                                </div>
+                                {(voiceTagText || displayContent) ? (
+                                    <div
+                                        className={`shrink-0 ml-0.5 px-1.5 py-0.5 rounded-lg text-[9px] font-medium transition-all ${showVoiceText ? 'ring-1 ring-current/20' : ''}`}
+                                        style={{
+                                            color: vbText || 'rgba(100,116,139,0.7)',
+                                            backgroundColor: showVoiceText ? 'rgba(0,0,0,0.08)' : 'rgba(0,0,0,0.04)',
+                                        }}
+                                        onClick={(e) => { e.stopPropagation(); e.preventDefault(); setShowVoiceText(v => !v); }}
+                                    >
+                                        {showVoiceText ? '收起' : '转文字'}
+                                    </div>
+                                ) : (
+                                    <span className="text-[9px] shrink-0" style={{ color: vbText || 'rgba(100,116,139,0.7)' }}>语音</span>
+                                )}
                             </div>
-                            <div className="flex-1 flex items-center gap-[3px] h-5 overflow-hidden">
-                                {[4, 10, 6, 14, 8, 12, 5, 11, 7, 13, 4, 9, 6, 11, 5, 8, 10, 7, 12, 6].map((h, i) => (
-                                    <div key={i} className="w-[2.5px] rounded-full" style={{ height: `${Math.max(2, h * 0.4)}px`, backgroundColor: vbWave ? vbWave + '60' : `rgba(148, 163, 184, ${0.25 + (h / 14) * 0.35})` }} />
-                                ))}
-                            </div>
-                            <span className="text-[9px] shrink-0" style={{ color: vbText || 'rgba(100,116,139,0.7)' }}>语音</span>
-                        </button>
+                            {showVoiceText && (voiceTagText || displayContent) && (
+                                <div className="mt-1.5 px-3 py-2 rounded-xl text-[11px] leading-relaxed whitespace-pre-wrap"
+                                    style={{
+                                        backgroundColor: vbBg || 'rgba(0,0,0,0.02)',
+                                        color: vbText || '#475569',
+                                        border: '1px solid rgba(0,0,0,0.04)',
+                                    }}
+                                >
+                                    {voiceTagText || displayContent}
+                                </div>
+                            )}
+                        </div>
                     ) : null}
                 </div>
                 );

@@ -490,6 +490,44 @@ export async function copyInstantWorkerBundleToClipboard(): Promise<void> {
 }
 
 /**
+ * 生成 Deno Deploy Playground 用的 loader 片段（自动追新部署方式）。
+ *
+ * 用户贴一次, 之后每次冷启动 loader 都 fetch 站点发布的最新 bundle 文本,
+ * 塞进 data: URL 再 import。效果: 部署一次, 永久自动追新, 用户无需再碰
+ * Playground。
+ *
+ * 为什么不直接动态 import 远程 URL: Deno Deploy 线上运行时带 --cached-only,
+ * 只认部署时已缓存的模块, 运行时拼出来的远程 specifier 一律拒载
+ * ("Specifier not found in cache")。而 fetch 拿文本不受模块缓存管制,
+ * data: URL 自带内容不算远程模块, 两步合起来就绕开了封锁 (本地
+ * `deno run --cached-only` 模拟已验证)。
+ *
+ * 站点不可用时 loader 直接抛错起不来 —— 没有可回退的缓存副本, 下次
+ * 冷启动自然重试。
+ *
+ * @param site 站点根 URL。默认取当前页面 origin + BASE_URL, 自部署站点
+ *             因此天然指向自己发布的那份 bundle。
+ */
+export function buildDenoLoaderSnippet(site?: string): string {
+  let resolvedSite = site ?? new URL(import.meta.env.BASE_URL || '/', window.location.origin).href;
+  if (!resolvedSite.endsWith('/')) resolvedSite += '/';
+  return [
+    '// SullyOS Instant Push — Deno Deploy loader (自动追新)',
+    '// 整段贴进 Playground 即可, 之后无需手动更新 worker。',
+    'export {}; // 标记为 module, 顶层 await 才合法',
+    `const SITE = ${JSON.stringify(resolvedSite)};`,
+    'const code = await (await fetch(`${SITE}instant-worker.deno.bundle.js`, { cache: "no-store" })).text();',
+    'await import(`data:application/javascript;charset=utf-8,${encodeURIComponent(code)}`);',
+    '',
+  ].join('\n');
+}
+
+/** 复制 Deno loader 片段到剪贴板。与 copyInstantWorkerBundleToClipboard 平行的 Deno 版入口。 */
+export async function copyDenoLoaderToClipboard(): Promise<void> {
+  await navigator.clipboard.writeText(buildDenoLoaderSnippet());
+}
+
+/**
  * 根据用户填的 workerUrl 推算 Cloudflare dashboard 编辑界面的 deep link。
  *
  * Cloudflare 接受 `?to=/:account/...` 模式, 登录后会自动用当前账号 ID 替换 :account
@@ -718,6 +756,7 @@ export type InstantBusinessPayload = Omit<InstantPushPayload, 'pushSubscription'
 export type InstantOutcome =
   | 'received'
   | 'timeout'
+  | 'cancelled'         // 用户切走/关页或主动 abort, UI 不弹错 (caller 自决静默)
   | 'config-missing'
   | 'subscription-failed'
   | 'send-failed';
@@ -730,12 +769,14 @@ export interface InstantAwaitResult {
   diagnostics?: InstantDiagnostics;
 }
 
-const DEFAULT_INSTANT_TIMEOUT_MS = 90_000;
+// Instant Push 路径用户可能不在前台 (锁屏 / 切走 / 关屏), 没有「转圈」之类视觉反馈替代,
+// 必须自设客户端上限, 不能像主聊天本地 fetch 那样无限等。300s 给慢模型 / 长 context 留余
+// 量, 同时避免 worker 真死时用户要等很久才看到错。
+const DEFAULT_INSTANT_TIMEOUT_MS = 300_000;
 
-// SSE 流结束后, 再给「SW 派发 → 客户端 flushInboxToChat 写完 DB」这一跳的宽限时长。
-// 流跑完 (stream_done) 只代表 payload 都交给了 SW, 不代表已落库; 真正的成功信号是
-// active-msg-received。这一跳正常 <1s, 给 8s 容错 (含 applyAssistantPostProcessing)。
-const SSE_FLUSH_GRACE_MS = 8_000;
+// (旧 SSE_FLUSH_GRACE_MS 已删 — grace 现在由 client.deliver() 内部 _computeGrace 处理:
+// min(remainingBudget, max(5000, timeoutMs * 0.1))。300s 整体 timeout 下默认 30s grace,
+// 比之前硬 8s 给慢 worker / iOS 早杀 SSE 的场景留更多余量。)
 const INSTANT_TRACE_LOG_KEY = 'instant_push_trace_log_v1';
 const INSTANT_TRACE_LOG_LIMIT = 200;
 
@@ -924,24 +965,7 @@ export async function sendInstantPushAndAwaitReply(
       },
     };
   }
-  // 必须先挂监听再 send，否则极快的 push 可能漏掉
-  let pushResolver: () => void = () => {};
-  let receivedPushDetail: any = null;
-  const pushArrived = new Promise<void>((resolve) => { pushResolver = resolve; });
-  const pushHandler = (e: Event) => {
-    const detail = (e as CustomEvent).detail;
-    if (detail?.charId === charId) {
-      receivedPushDetail = detail;
-      instantTrace(sessionId, 'active-msg-received', {
-        detailCharId: detail?.charId,
-        bodyChars: typeof detail?.body === 'string' ? detail.body.length : undefined,
-        emotionUpdate: !!detail?.emotionUpdate,
-      });
-      pushResolver();
-    }
-  };
-  window.addEventListener('active-msg-received', pushHandler);
-
+  // SullyOS outbound session: amsg-instant 0.8+ /continue 续跑用的标识, 写失败不挂主路径
   try {
     await ActiveMsgStore.saveOutboundSession({
       sessionId,
@@ -957,22 +981,66 @@ export async function sendInstantPushAndAwaitReply(
       createdAt: Date.now(),
     });
   } catch (e) {
-    // outbound 写入失败不阻塞 push 主路径; Round 2 worker 升级前这条数据没人读
     log.warn('saveOutboundSession failed (non-fatal)', { sessionId, error: e });
   }
 
+  // SSE/Push 双通道协调下沉到 amsg-client 2.5.0 的 client.deliver() 里:
+  //   - observed mode: 平台无关 Promise<Receipt> 注入 SW 端的送达信号
+  //   - 内部 race + grace + receipt identity 校验 + signal.aborted pre-flight 全做了
+  //   - outcome 5 值 (delivered / completed-unconfirmed / timeout / cancelled / send-failed)
+  // 本仓库只剩薄壳: 把 SW 'active-msg-received' 包成 observed Promise, onChunk 闭包收集
+  // SW chunk ack 状态, 把 deliver() outcome 映射回历史 InstantOutcome (含 SW 自报错文案
+  // 优先级)。详见 docs/instant-push-dual-channel.md。
   const sendStartedAt = Date.now();
-  const abortController = new AbortController();
+  const abortCtrl = new AbortController();
+  const cleanups: Array<() => void> = [];
+
+  // observed signal: SW broadcast → resolve 一个带 sessionId 的 receipt。identity 优先用 sessionId 严格匹配,
+  // 杜绝同 char 多轮并发 / 上一轮延迟到达的旧 push 把新一轮 send 误判成 delivered。老 inbox 残留消息可能不带
+  // sessionId, 此时回退按 charId 兼容; 等所有客户端 / SW 全部走过这次 PR 之后这个 fallback 可以删。
+  let receivedPushDetail: any = null;
+  const observed = new Promise<{ sessionId: string; channel: string }>((resolve) => {
+    const handler = (e: Event) => {
+      const detail = (e as CustomEvent).detail;
+      const matchesSession = detail?.sessionId && detail.sessionId === sessionId;
+      const matchesCharFallback = !detail?.sessionId && detail?.charId === charId;
+      if (matchesSession || matchesCharFallback) {
+        receivedPushDetail = detail;
+        instantTrace(sessionId, 'active-msg-received', {
+          detailCharId: detail?.charId,
+          detailSessionId: detail?.sessionId,
+          matchedBy: matchesSession ? 'sessionId' : 'charId-fallback',
+          bodyChars: typeof detail?.body === 'string' ? detail.body.length : undefined,
+          emotionUpdate: !!detail?.emotionUpdate,
+        });
+        window.removeEventListener('active-msg-received', handler);
+        resolve({ sessionId, channel: 'sw' });
+      }
+    };
+    window.addEventListener('active-msg-received', handler);
+    cleanups.push(() => window.removeEventListener('active-msg-received', handler));
+  });
+
+  // pagehide → caller-initiated cancel (deliver() 返 outcome:'cancelled', UI 静默)。
+  // visibilitychange 只 trace, 不 abort —— iOS 切后台不少是几秒就回来的, 别误杀 SSE。
   const abortOnPageHide = (event: PageTransitionEvent) => {
     instantTrace(sessionId, 'pagehide', { persisted: !!event.persisted });
     if (event.persisted) return;
-    abortController.abort();
+    abortCtrl.abort();
   };
-  const traceVisibilityChange = () => {
-    instantTrace(sessionId, 'visibilitychange');
-  };
-  let pageHideListenerAttached = false;
-  let visibilityListenerAttached = false;
+  const traceVisibilityChange = () => instantTrace(sessionId, 'visibilitychange');
+  window.addEventListener('pagehide', abortOnPageHide, { once: true });
+  cleanups.push(() => window.removeEventListener('pagehide', abortOnPageHide));
+  document.addEventListener('visibilitychange', traceVisibilityChange);
+  cleanups.push(() => document.removeEventListener('visibilitychange', traceVisibilityChange));
+
+  // onChunk 闭包收集 SW chunk ack 状态。失败文案优先级: SW 自报错 (sseBusinessError /
+  // sseDeliveryFailed) > 裸 transportError —— amsg-sw 2.3.0+ ack 落库失败时 ok:true 但
+  // 带 businessError, 升级文案为「SW 写库失败: <原因>」更可操作。
+  let sseDeliveredOk = false;
+  let sseDeliveryFailed = false;
+  let sseBusinessError: string | undefined;
+
   try {
     const wirePayload: InstantPushPayload = {
       ...business,
@@ -981,30 +1049,25 @@ export async function sendInstantPushAndAwaitReply(
       oversizeTransport: getInstantOversizeTransport(cfg),
     };
 
-    window.addEventListener('pagehide', abortOnPageHide, { once: true });
-    pageHideListenerAttached = true;
-    document.addEventListener('visibilitychange', traceVisibilityChange);
-    visibilityListenerAttached = true;
-
     const reiClient = new ReiClient({
       baseUrl: normalizeWorkerUrl(cfg.workerUrl || ''),
       instantEncryption: false,
       instantClientToken: cfg.clientToken || '',
     });
 
-    // postSsePayloadToServiceWorker 投递失败时返回 { ok:false } 而非 throw, 单看 stream
-    // 是否跑完识别不出失败。这里记下投递结果, 供下面 stream_done 分支判定 / 诊断用。
-    // amsg-sw 2.3.0+: ack 落库失败时 ok:true 但带 businessError —— 记下来好把超时文案
-    // 从笼统的「未确认写入」升级成精确的「SW 写库失败: <原因>」。
-    let sseDeliveredOk = false;
-    let sseDeliveryFailed = false;
-    let sseBusinessError: string | undefined;
     instantTrace(sessionId, 'sse-start', {
       oversizeTransport: wirePayload.oversizeTransport,
     });
-    const streamPromise = reiClient.consumeInstantStream(wirePayload, '/instant', {
-      signal: abortController.signal,
-      onPayload: async (p: any) => {
+    // deliver() 是 async, fetch dispatch 在内部 await 后才发生; onPosted 只用于熄灭
+    // 「请求准备中」UI 点, 此处 fire 即可——deliver 必然马上接管网络。
+    onPosted?.();
+
+    const result = await reiClient.deliver(wirePayload, {
+      delivery: { mode: 'observed', observed },
+      timeoutMs,
+      signal: abortCtrl.signal,
+      endpointPath: '/instant',
+      onChunk: async (p: any) => {
         instantTrace(sessionId, 'sse-payload', {
           messageKind: p?.messageKind,
           messageId: p?.messageId,
@@ -1022,132 +1085,151 @@ export async function sendInstantPushAndAwaitReply(
           businessError: ack.businessError,
         });
       },
+      // 请求体 gzip 上行：大 body 超阈值时压缩再发, worker 入口解压 —— iOS 上行 ~322KB
+      // 压到 ~50KB, 绕开「大 body 上传撑过超时被中间层掐」。上下文全量不变。线上契约见
+      // worker decodeGzipRequestBody。旧版库忽略此选项、明文发, 向后兼容。
+      compressRequest: true,
     });
-    // `consumeInstantStream()` calls fetch() synchronously before its first await,
-    // so the request is now queued in the browser network stack.
-    onPosted?.();
-    instantTrace(sessionId, 'sse-dispatched');
 
-    const result = await Promise.race([
-      pushArrived.then(() => 'arrived' as const),
-      streamPromise.then(() => 'stream_done' as const),
-      new Promise<'timeout'>((r) => setTimeout(() => r('timeout'), timeoutMs)),
-    ]);
-    instantTrace(sessionId, 'race-result', { result });
+    // amsg-client 2.5.0 的 .d.ts 是 JSDoc + JS, TS 推断 result.detail 时只看到必填的
+    // waitedMs, 选填字段 (transportEnded / observationChannelStalled / transportError
+    // 等) 被推断窄化了。本地补一个匹配 README 文档的 detail 形状, 让映射代码读到正确类型。
+    type LibDetail = {
+      waitedMs: number;
+      transportEnded?: boolean;
+      transportError?: unknown;
+      transportResponse?: unknown;
+      chunkHandlerError?: unknown;
+      cancelledByCaller?: boolean;
+      observationChannelStalled?: boolean;
+      receipt?: { messageId?: string; sessionId?: string; channel?: string };
+    };
+    const detail = (result.detail ?? { waitedMs: 0 }) as LibDetail;
+    const waitedMs = detail.waitedMs ?? (Date.now() - sendStartedAt);
+    instantTrace(sessionId, 'deliver-result', {
+      outcome: result.outcome,
+      waitedMs,
+      transportEnded: detail.transportEnded,
+      observationChannelStalled: detail.observationChannelStalled,
+      cancelledByCaller: detail.cancelledByCaller,
+      sseDeliveredOk,
+      sseBusinessError,
+    });
 
-    if (result === 'timeout') {
-      abortController.abort();
-      instantTrace(sessionId, 'timeout', { waitedMs: Date.now() - sendStartedAt });
+    // ─── outcome 映射回 InstantOutcome ───────────────────────────────────
+    // delivered → received  (push 确认送达)
+    // cancelled → cancelled (pagehide / signal abort, useChatAI 静默)
+    // timeout   → timeout   (整体预算耗 / observed mode 通道 stalled / SW 自报错)
+    // send-failed → send-failed (transport 死 + observed 没接力)
+    // completed-unconfirmed → 不可达 (observed mode 下) , 防御性映射为 send-failed
+    if (result.outcome === 'delivered') {
       appendDevDebugInstantPushLog({
         url: cfg.workerUrl,
         method: 'POST',
         status: 200,
-        requestBody: {
-          transport: 'instant-push-sse',
-          sessionId,
-          ...business,
-          apiKey: business.apiKey ? '<redacted>' : '',
-        },
+        requestBody: { transport: 'instant-push-sse', sessionId, ...business, apiKey: business.apiKey ? '<redacted>' : '' },
+        response: { outcome: 'received', push: receivedPushDetail },
+      });
+      return { ok: true, outcome: 'received' };
+    }
+
+    if (result.outcome === 'cancelled') {
+      appendDevDebugInstantPushLog({
+        url: cfg.workerUrl,
+        method: 'POST',
+        status: 200,
+        requestBody: { transport: 'instant-push-sse', sessionId, ...business, apiKey: business.apiKey ? '<redacted>' : '' },
+        response: { outcome: 'cancelled', cancelledByCaller: detail.cancelledByCaller, waitedMs },
+      });
+      return {
+        ok: false,
+        outcome: 'cancelled',
+        error: '发送已取消（页面切换或主动 abort）',
+        diagnostics: { env, context },
+      };
+    }
+
+    if (result.outcome === 'timeout') {
+      // 文案优先级: SW 自报错 > observation stalled > 普通 timeout。
+      const observationStalled = !!detail.observationChannelStalled;
+      const errMsg = sseBusinessError
+        ? `AI 回复已生成，但本机 Service Worker 写入本地库失败（${sseBusinessError}），消息未落库 —— 刷新页面后重试`
+        : sseDeliveryFailed
+          ? 'AI 回复已生成，但本机 Service Worker 未确认收下（无 controller / 通道异常），消息可能未落库 —— 刷新页面后重试'
+          : observationStalled
+            ? 'AI 回复已发送但本机推送通道暂未确认收到 —— 刷新页面或检查通知通道'
+            : `AI 回复超时（${Math.round(timeoutMs / 1000)}s 未收到推送，检查 worker 或通知通道）`;
+      appendDevDebugInstantPushLog({
+        url: cfg.workerUrl,
+        method: 'POST',
+        status: 200,
+        requestBody: { transport: 'instant-push-sse', sessionId, ...business, apiKey: business.apiKey ? '<redacted>' : '' },
         response: {
           outcome: 'timeout',
-          waitedMs: Date.now() - sendStartedAt,
+          reason: sseBusinessError ? 'business-error' : (sseDeliveryFailed ? 'sse-delivery-failed' : (observationStalled ? 'observation-stalled' : 'budget-exhausted')),
+          sseDeliveredOk,
+          sseBusinessError,
+          waitedMs,
         },
       });
       return {
         ok: false,
         outcome: 'timeout',
-        error: `AI 回复超时（${Math.round(timeoutMs / 1000)}s 未收到推送，检查 worker 或通知通道）`,
+        error: errMsg,
         diagnostics: {
           env, context,
-          timeout: {
-            waitedMs: Date.now() - sendStartedAt,
-            httpStatusWhenDispatched: 200,
-          },
+          timeout: { waitedMs, httpStatusWhenDispatched: 200 },
         },
       };
     }
 
-    // result === 'arrived' 才是确定成功 (active-msg-received 已 fire = 消息落库)。
-    // result === 'stream_done' 只代表 worker 流结束 + payload 交给了 SW, 此时再给落库
-    // 这一跳一个短宽限: 等到 pushArrived 才算成功; 等不到按未达处理, 杜绝「流跑完就报
-    // 成功」的误报 (含 SW 投递失败只 resolve(false) 不抛、worker 因 SSE「成功」不再补
-    // Web Push 兜底 → 消息静默丢失却报 received 的情形)。
-    if (result === 'stream_done') {
-      const flushed = await Promise.race([
-        pushArrived.then(() => true),
-        new Promise<boolean>((r) => setTimeout(() => r(false), SSE_FLUSH_GRACE_MS)),
-      ]);
-      instantTrace(sessionId, 'stream-done-grace', {
-        flushed,
-        sseDeliveredOk,
-        sseDeliveryFailed,
-        sseBusinessError,
+    if (result.outcome === 'send-failed') {
+      // transport 死 + observed 没接力。SW 若自报错穿插进文案给排查线索, outcome 维持
+      // send-failed —— 根因是 transport 中断, 不能降级 (会误导用户「刷新页面看回复」)。
+      const transportError = detail.transportError as any;
+      const sseMsg = transportError?.message || String(transportError ?? 'unknown');
+      const swHint = sseBusinessError
+        ? ` (SW 也自报落库错: ${sseBusinessError})`
+        : sseDeliveryFailed
+          ? ' (SW 也未确认收下任何 chunk)'
+          : '';
+      appendDevDebugInstantPushLog({
+        url: cfg.workerUrl,
+        method: 'POST',
+        status: 500,
+        requestBody: { transport: 'instant-push-sse', sessionId, ...business, apiKey: business.apiKey ? '<redacted>' : '' },
+        response: {
+          outcome: 'send-failed',
+          error: String(transportError),
+          sseBusinessError,
+          sseDeliveryFailed,
+          sseDeliveredOk,
+          waitedMs,
+        },
       });
-      if (!flushed) {
-        abortController.abort();
-        const waitedMs = Date.now() - sendStartedAt;
-        instantTrace(sessionId, 'flush-not-confirmed', { waitedMs });
-        appendDevDebugInstantPushLog({
-          url: cfg.workerUrl,
-          method: 'POST',
-          status: 200,
-          requestBody: {
-            transport: 'instant-push-sse',
-            sessionId,
-            ...business,
-            apiKey: business.apiKey ? '<redacted>' : '',
-          },
-          response: {
-            outcome: 'timeout',
-            reason: sseBusinessError
-              ? 'business-error'
-              : (sseDeliveryFailed ? 'sse-delivery-failed' : 'flush-not-confirmed'),
-            sseDeliveredOk,
-            sseBusinessError,
-            waitedMs,
-          },
-        });
-        return {
-          ok: false,
-          outcome: 'timeout',
-          error: sseBusinessError
-            ? `AI 回复已生成，但本机 Service Worker 写入本地库失败（${sseBusinessError}），消息未落库 —— 刷新页面后重试`
-            : sseDeliveryFailed
-              ? 'AI 回复已生成，但本机 Service Worker 未确认收下（无 controller / 通道异常），消息可能未落库 —— 刷新页面后重试'
-              : `AI 回复已生成，但 ${Math.round(SSE_FLUSH_GRACE_MS / 1000)}s 内未确认写入本地 —— 刷新页面后重试`,
-          diagnostics: {
-            env, context,
-            timeout: {
-              waitedMs,
-              httpStatusWhenDispatched: 200,
-            },
-          },
-        };
-      }
+      return {
+        ok: false,
+        outcome: 'send-failed',
+        error: `AI 回复传输中断: ${sseMsg}${swHint}`,
+        diagnostics: {
+          env, context,
+          fetchError: { name: transportError?.name, message: sseMsg },
+        },
+      };
     }
 
-    appendDevDebugInstantPushLog({
-      url: cfg.workerUrl,
-      method: 'POST',
-      status: 200,
-      requestBody: {
-        transport: 'instant-push-sse',
-        sessionId,
-        ...business,
-        apiKey: business.apiKey ? '<redacted>' : '',
-      },
-      response: {
-        outcome: 'received',
-        push: receivedPushDetail,
-      },
-    });
-    instantTrace(sessionId, 'received', {
-      waitedMs: Date.now() - sendStartedAt,
-      push: !!receivedPushDetail,
-    });
-    return { ok: true, outcome: 'received' };
+    // completed-unconfirmed: observed mode 下理论不可达。防御性 fallback。
+    instantTrace(sessionId, 'unexpected-outcome', { outcome: result.outcome, waitedMs });
+    return {
+      ok: false,
+      outcome: 'send-failed',
+      error: `内部错误: deliver() 返回了 observed mode 下不应出现的 outcome=${result.outcome}`,
+      diagnostics: { env, context },
+    };
   } catch (err: any) {
-    instantTrace(sessionId, 'sse-catch', {
+    // deliver() 入参校验抛 TypeError / payload 序列化崩 / new ReiClient 构造异常 / 其他
+    // 编程错误。SSE 网络 reject 在 deliver() 内部已被收编, 不会进这里。
+    instantTrace(sessionId, 'unexpected-throw', {
       name: err?.name,
       message: err?.message || String(err),
       waitedMs: Date.now() - sendStartedAt,
@@ -1156,16 +1238,8 @@ export async function sendInstantPushAndAwaitReply(
       url: cfg.workerUrl,
       method: 'POST',
       status: 500,
-      requestBody: {
-        transport: 'instant-push-sse',
-        sessionId,
-        ...business,
-        apiKey: business.apiKey ? '<redacted>' : '',
-      },
-      response: {
-        outcome: 'send-failed',
-        error: String(err),
-      },
+      requestBody: { transport: 'instant-push-sse', sessionId, ...business, apiKey: business.apiKey ? '<redacted>' : '' },
+      response: { outcome: 'send-failed', error: String(err) },
     });
     return {
       ok: false,
@@ -1173,17 +1247,13 @@ export async function sendInstantPushAndAwaitReply(
       error: err?.message || String(err),
       diagnostics: {
         env, context,
-        fetchError: { message: err?.message || String(err) },
+        fetchError: { name: err?.name, message: err?.message || String(err) },
       },
     };
   } finally {
-    if (pageHideListenerAttached) {
-      try { window.removeEventListener('pagehide', abortOnPageHide); } catch { /* ignore */ }
+    for (const fn of cleanups) {
+      try { fn(); } catch { /* ignore */ }
     }
-    if (visibilityListenerAttached) {
-      try { document.removeEventListener('visibilitychange', traceVisibilityChange); } catch { /* ignore */ }
-    }
-    window.removeEventListener('active-msg-received', pushHandler);
     instantTrace(sessionId, 'cleanup');
   }
 }

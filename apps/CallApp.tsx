@@ -1,16 +1,18 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
-import { Microphone, SpeakerHigh, SpeakerSlash, PhoneDisconnect, Translate } from '@phosphor-icons/react';
+import { Microphone, SpeakerHigh, SpeakerSlash, PhoneDisconnect, Translate, Gear, Clock, CaretLeft, CaretRight } from '@phosphor-icons/react';
 import { useOS } from '../context/OSContext';
 import { safeFetchJson } from '../utils/safeApi';
 import { minimaxFetch } from '../utils/minimaxEndpoint';
 import { resolveMiniMaxApiKey } from '../utils/minimaxApiKey';
 import { hashTtsParams, getCachedTts, saveCachedTts } from '../utils/ttsCache';
+import { cleanTextForTts, insertSpeechBreaks, convertHexAudioToBlob, fetchRemoteAudioBlob, VALID_EMOTIONS, stripEmotionTags } from '../utils/minimaxTts';
+import { startStt, isSttSupported, type SttSession } from '../utils/speechToText';
 import { ContextBuilder } from '../utils/context';
 import { injectMemoryPalace } from '../utils/memoryPalace/pipeline';
 import { RealtimeContextManager } from '../utils/realtimeContext';
 import { DB } from '../utils/db';
 import { ChatPrompts } from '../utils/chatPrompts';
-import { Message, ChatTheme } from '../types';
+import { Message, ChatTheme, AppID } from '../types';
 import { PRESET_THEMES } from '../components/chat/ChatConstants';
 type CallState = 'idle' | 'connecting' | 'listening' | 'thinking' | 'speaking' | 'ended' | 'error';
 type ViewMode = 'role-select' | 'in-call' | 'history' | 'record-detail';
@@ -42,9 +44,18 @@ const summarizeKeepsakeLine = (transcript: CallBubble[], charName: string) => {
   const polished = sentence.length > 48 ? `${sentence.slice(0, 48)}…` : sentence;
   return `“${polished}” —— ${charName}`;
 };
+// Emotion the AI may declare at the very START of a call reply, e.g. "[happy] 喂？".
+// Only a leading tag is APPLIED (conservative — avoids surprise mid-utterance tone
+// swings); any other [emotion] tags are stripped without effect by stripEmotionTags.
+const LEADING_EMOTION_RE = /^\s*[\[【]\s*(happy|sad|angry|fearful|disgusted|surprised|calm|fluent)\s*[\]】]\s*/i;
+const extractLeadingEmotion = (raw: string): string | undefined => {
+  const m = (raw || '').match(LEADING_EMOTION_RE);
+  return m ? m[1].toLowerCase() : undefined;
+};
 const sanitizeAssistantOutput = (raw: string) => {
   if (!raw) return '';
-  return raw
+  // Strip ALL [emotion]/【emotion】 tags (any position) so they're never shown or read.
+  return stripEmotionTags(raw)
     .replace(/^\s*(?:\[\s*通话\s*\]\s*)+/gim, '')
     .replace(/^\s*(?:\[\s*(?:聊天|约会)\s*\]\s*)+/gim, '')
     .replace(/^\s*\[?\d{1,2}:\d{2}(?::\d{2})?\]?\s*/gm, '')
@@ -52,127 +63,14 @@ const sanitizeAssistantOutput = (raw: string) => {
     .replace(/^\s*时间戳[:：].*$/gim, '')
     .trim();
 };
-/** 中文舞台指示 → MiniMax 语气词标签映射 */
-const NARRATION_TO_INTERJECTION: Record<string, string> = {
-  '轻笑': '(chuckle)', '笑': '(laughs)', '笑声': '(laughs)', '大笑': '(laughs)',
-  '叹气': '(sighs)', '叹息': '(sighs)',
-  '咳嗽': '(coughs)', '咳': '(coughs)',
-  '清嗓': '(clear-throat)', '清嗓子': '(clear-throat)',
-  '呻吟': '(groans)', '哼': '(groans)',
-  '换气': '(breath)', '呼吸': '(breath)',
-  '喘气': '(pant)', '喘': '(pant)',
-  '吸气': '(inhale)', '深吸一口气': '(inhale)',
-  '呼气': '(exhale)',
-  '倒吸气': '(gasps)', '倒吸一口气': '(gasps)',
-  '吸鼻子': '(sniffs)',
-  '喷鼻息': '(snorts)',
-  '咂嘴': '(lip-smacking)',
-  '哼唱': '(humming)',
-  '嘶': '(hissing)',
-  '嗯': '(emm)', '呃': '(emm)',
-  '啧': '(lip-smacking)', '啧啧': '(lip-smacking)',
-  '咕噜': '(groans)', '咕噜咕噜': '(groans)',
-  '嘟囔': '(emm)', '嘀咕': '(emm)',
-  '嘘': '(hissing)', '嘘嘘': '(hissing)',
-  '哇': '(gasps)', '哇哦': '(gasps)',
-  '嗷': '(groans)', '嗷嗷': '(groans)',
-  '呜': '(groans)', '呜呜': '(groans)',
-  '嘤': '(groans)', '嘤嘤': '(groans)',
-  '噗': '(snorts)', '噗嗤': '(snorts)',
-  '啊': '(gasps)',
-  '唔': '(emm)',
-};
-/** 裸拟声词 → 语气词标签（仅处理 TTS 无法自然发音的词，避免误伤正常用词） */
-const BARE_ONOMATOPOEIA: [RegExp, string][] = [
-  [/啧啧啧/g, '(lip-smacking)'],
-  [/啧啧/g, '(lip-smacking)'],
-  [/啧/g, '(lip-smacking)'],
-  [/咕噜咕噜/g, '(groans)'],
-  [/咕噜/g, '(groans)'],
-  [/嘤嘤嘤/g, '(groans)'],
-  [/嘤嘤/g, '(groans)'],
-  [/噗嗤/g, '(snorts)'],
-  [/噗/g, '(snorts)'],
-  [/嘁/g, '(snorts)'],
-  [/嘘—*/g, '(hissing)'],
-  [/哼哼/g, '(groans)'],
+const CALL_WAVE = [10, 18, 26, 14, 30, 12, 22, 32, 16, 24, 12, 28, 18, 10, 26, 20, 14, 30, 12, 22];
+const CALL_SPARKLES = [
+  { top: '14%', left: '16%', s: 3 }, { top: '22%', left: '82%', s: 2 },
+  { top: '40%', left: '10%', s: 2 }, { top: '58%', left: '88%', s: 3 },
+  { top: '70%', left: '20%', s: 2 }, { top: '34%', left: '70%', s: 2 },
+  { top: '48%', left: '54%', s: 2 }, { top: '12%', left: '58%', s: 2 },
+  { top: '78%', left: '64%', s: 3 }, { top: '64%', left: '38%', s: 2 },
 ];
-// MiniMax 支持的合法语气标签 — 这些必须保留，不能被当作舞台指示砍掉
-const VALID_INTERJECTION_TAGS = new Set([
-  'chuckle', 'laughs', 'sighs', 'coughs', 'clear-throat', 'groans',
-  'breath', 'pant', 'inhale', 'exhale', 'gasps', 'sniffs', 'snorts',
-  'lip-smacking', 'humming', 'hissing', 'emm',
-]);
-/** 清理 <语音> 标签内的内容：映射中文舞台指示 → 语气标签，删除不认识的括号描述 */
-const cleanVoiceTagContent = (voiceText: string): string => {
-  if (!voiceText) return '';
-  let result = voiceText
-    // 中文括号：先尝试映射，映射不到就删
-    .replace(/（([^（）\n]{1,48})）/g, (_match, cue: string) => {
-      const trimmed = cue.trim();
-      if (NARRATION_TO_INTERJECTION[trimmed]) return NARRATION_TO_INTERJECTION[trimmed];
-      for (const [key, tag] of Object.entries(NARRATION_TO_INTERJECTION)) {
-        if (trimmed.includes(key)) return tag;
-      }
-      return ''; // 无法映射 → 删除
-    })
-    // 西文括号：保留合法语气标签，删除其他
-    .replace(/\(([^)]{1,80})\)/g, (_match, inner: string) => {
-      const tag = inner.trim().toLowerCase();
-      if (VALID_INTERJECTION_TAGS.has(tag)) return `(${tag})`;
-      return ''; // 不是合法标签 → 删除（如"背景有电流杂音"）
-    });
-  // 裸拟声词替换
-  for (const [pattern, tag] of BARE_ONOMATOPOEIA) {
-    result = result.replace(pattern, tag);
-  }
-  return result.replace(/\s+/g, ' ').trim();
-};
-const convertNarrationCues = (raw: string) => {
-  if (!raw) return '';
-  let result = raw
-    .replace(/<[语語]音>[\s\S]*?<\/[语語]音>/g, '')
-    .replace(/（([^（）\n]{1,48})）/g, (_match, cue: string) => {
-      const trimmed = cue.trim();
-      // 直接匹配
-      if (NARRATION_TO_INTERJECTION[trimmed]) return NARRATION_TO_INTERJECTION[trimmed];
-      // 模糊匹配：舞台指示包含关键词
-      for (const [key, tag] of Object.entries(NARRATION_TO_INTERJECTION)) {
-        if (trimmed.includes(key)) return tag;
-      }
-      // 无法映射的舞台指示直接删除（避免 TTS 朗读）
-      return '';
-    });
-  // 裸拟声词替换（非括号内的拟声词）
-  for (const [pattern, tag] of BARE_ONOMATOPOEIA) {
-    result = result.replace(pattern, tag);
-  }
-  return result.replace(/\s+/g, ' ').trim();
-};
-/** 为 TTS 文本插入 MiniMax 原生停顿标签 <#秒数#>，让语音有自然停顿
- *  注意：停顿值不宜过大，过大会导致混合声线（timber_weights）在各段产生不同混合效果 */
-const insertSpeechBreaks = (text: string): string => {
-  if (!text) return '';
-  return text
-    // 省略号 → 短停顿（思考 / 犹豫）
-    .replace(/[…]{1,}/g, '…<#0.15#>')
-    .replace(/\.{3,}/g, '...<#0.15#>')
-    .replace(/。{2,}/g, '。<#0.15#>')
-    // 破折号 → 微停顿（话题转折）
-    .replace(/——/g, '——<#0.1#>')
-    .replace(/--/g, '--<#0.1#>')
-    // 句末标点 → 微停顿（句间呼吸）— 仅中文句号和感叹/问号
-    .replace(/([。！？])/g, '$1<#0.08#>')
-    // 英文句末标点不加停顿（TTS 自身已有节奏）
-    // 分号 → 不加停顿（太细碎）
-    // 清理多余的连续停顿标签（避免叠加）
-    .replace(/(<#[\d.]+#>[\s]*){2,}/g, (match) => {
-      const times = [...match.matchAll(/<#([\d.]+)#>/g)].map(m => parseFloat(m[1]));
-      const maxTime = Math.min(Math.max(...times), 0.2);
-      return `<#${maxTime}#>`;
-    })
-    .trim();
-};
 const VOICE_LANG_OPTIONS = [
   { value: '', label: '默认' },
   { value: 'en', label: 'English' },
@@ -183,34 +81,15 @@ const VOICE_LANG_OPTIONS = [
   { value: 'de', label: 'Deutsch' },
   { value: 'ru', label: 'Русский' },
 ];
-/** 从 AI 回复中提取 <语音>…</语音> 标签内容（兼容繁体 語音） */
-const extractVoiceTag = (text: string): { display: string; speech: string; voiceText: string } => {
-  const match = text.match(/<[语語]音>([\s\S]*?)<\/[语語]音>/);
-  if (!match) return { display: text, speech: '', voiceText: '' };
-  const voiceText = match[1].trim();
-  const display = text.replace(/<[语語]音>[\s\S]*?<\/[语語]音>/g, '').trim();
-  return { display, speech: voiceText, voiceText };
-};
-const convertHexAudioToBlob = (hexAudio: string, mimeType = 'audio/mpeg'): Blob => {
-  const cleanHex = hexAudio.trim().replace(/^0x/i, '');
-  if (!cleanHex || cleanHex.length % 2 !== 0 || /[^\da-f]/i.test(cleanHex)) {
-    throw new Error('MiniMax 返回的 HEX 音频数据格式异常');
-  }
-  const bytes = new Uint8Array(cleanHex.length / 2);
-  for (let i = 0; i < cleanHex.length; i += 2) {
-    bytes[i / 2] = Number.parseInt(cleanHex.slice(i, i + 2), 16);
-  }
-  return new Blob([bytes], { type: mimeType });
-};
-const fetchRemoteAudioBlob = async (sourceUrl: string): Promise<Blob> => {
-  const cacheBustedUrl = sourceUrl.includes('?')
-    ? `${sourceUrl}&_ts=${Date.now()}`
-    : `${sourceUrl}?_ts=${Date.now()}`;
-  const response = await fetch(cacheBustedUrl, { cache: 'no-store' });
-  if (!response.ok) throw new Error(`音频下载失败（HTTP ${response.status}）`);
-  const blob = await response.blob();
-  if (!blob.size) throw new Error('音频下载为空文件');
-  return blob;
+/** 从 AI 回复中提取 <语音 emotion="…">…</语音> 标签内容 + emotion（兼容繁体 語音、无属性） */
+const extractVoiceTag = (text: string): { display: string; speech: string; voiceText: string; emotion?: string } => {
+  const match = text.match(/<[语語]音(?:\s+emotion\s*=\s*["']?([a-zA-Z]+)["']?)?\s*>([\s\S]*?)<\/[语語]音>/);
+  if (!match) return { display: text, speech: '', voiceText: '', emotion: undefined };
+  const rawEmotion = (match[1] || '').trim().toLowerCase();
+  const emotion = VALID_EMOTIONS.has(rawEmotion) ? rawEmotion : undefined;
+  const voiceText = match[2].trim();
+  const display = text.replace(/<[语語]音[^>]*>[\s\S]*?<\/[语語]音>/g, '').trim();
+  return { display, speech: voiceText, voiceText, emotion };
 };
 // Derive the shared TTS cache key from the MiniMax payload. Must match the
 // key used by `synthesizeSpeechDetailed` so chat/date/call can reuse each
@@ -255,14 +134,45 @@ const splitTextForTts = (rawText: string, maxChunkLen = 120): string[] => {
     return arr;
   }).filter(Boolean);
 };
-const renderAssistantLine = (text: string) => {
-  const trimmed = text.trim();
-  // Split by narration cues（…）AND newlines, treat cues as block elements
-  const parts = trimmed.split(/(（[^（）\n]{1,48}）|\n)/g).filter(Boolean);
+// 语气词标签 → 展示用的中文小标签（把朗读用的 (sighs) 渲染成极简徽章，不用 emoji）
+const SOUND_TAG_META: Record<string, string> = {
+  chuckle: '轻笑', laughs: '笑', sighs: '叹气', coughs: '咳',
+  'clear-throat': '清嗓', groans: '哼唧', breath: '换气', pant: '喘',
+  inhale: '吸气', exhale: '呼气', gasps: '倒吸气', sniffs: '吸鼻',
+  snorts: '喷笑', 'lip-smacking': '咂嘴', humming: '哼唱', hissing: '嘶', emm: '嗯',
+};
+const SOUND_TAG_NAMES = Object.keys(SOUND_TAG_META).join('|');
+const SOUND_TAG_SPLIT_RE = new RegExp(`(（[^（）\\n]{1,48}）|\\((?:${SOUND_TAG_NAMES})\\)|\\n)`, 'gi');
+// 迷你声波条——呼应通话界面的波形主题，纯矢量（恒为浅色，避免深色主题下看不见）
+const SoundWaveGlyph = () => (
+  <span className="inline-flex items-center gap-[1.5px] align-middle" style={{ height: '0.7em' }} aria-hidden>
+    {[0.4, 0.85, 0.6, 1, 0.5].map((h, i) => (
+      <span key={i} className="w-[1.5px] rounded-full" style={{ height: `${h * 100}%`, background: 'rgba(255,255,255,0.85)' }} />
+    ))}
+  </span>
+);
+const renderAssistantLine = (text: string, accent = '#8b5cf6') => {
+  // 朗读用的停顿标记 <#0.4#> 不显示出来
+  const trimmed = text.replace(/<#[\d.]+#>/g, '').trim();
+  // 按 中文舞台指示（…）、英文语气词标签 (sighs)、换行 切分，前两者作为特殊元素渲染
+  const parts = trimmed.split(SOUND_TAG_SPLIT_RE).filter(Boolean);
   return parts.map((part, idx) => {
     if (part === '\n') return <div key={`br-${idx}`} className="h-2" />;
-    const isCue = /^（[^（）\n]{1,48}）$/.test(part);
-    if (isCue) return <div key={`cue-${idx}`} className="text-violet-300/95 italic my-1.5 text-[0.85em]">{part}</div>;
+    const soundMatch = part.match(new RegExp(`^\\((${SOUND_TAG_NAMES})\\)$`, 'i'));
+    if (soundMatch) {
+      const zh = SOUND_TAG_META[soundMatch[1].toLowerCase()];
+      // 文字恒为白色，accent 只用于淡底+描边，深色主题下也清晰可读
+      return (
+        <span key={`snd-${idx}`} className="inline-flex items-center gap-1 align-middle mx-0.5 px-1.5 py-[1px] rounded-full text-[0.7em] font-medium tracking-wide text-white/90"
+          style={{ background: `${accent}33`, border: '1px solid rgba(255,255,255,0.22)' }}>
+          <SoundWaveGlyph />
+          <span>{zh}</span>
+        </span>
+      );
+    }
+    if (/^（[^（）\n]{1,48}）$/.test(part)) {
+      return <div key={`cue-${idx}`} className="text-violet-300/95 italic my-1.5 text-[0.85em]">{part}</div>;
+    }
     return <React.Fragment key={`t-${idx}`}>{part}</React.Fragment>;
   });
 };
@@ -302,7 +212,7 @@ const buildCallPrompt = (userName: string, charName?: string, coreContext?: stri
 ✅ 要这样——有自己的节奏，像真人一样不完美：
 “嘶……你刚说的那个，等一下。”
 “……好吧确实挺离谱的。”
-“（轻笑）我刚差点把咖啡洒了，你别逗我。”
+“(chuckle) 我刚差点把咖啡洒了，你别逗我。”
 “说真的，今天有件事我还挺想跟你说的——但你先说完你那个。”
 
 ### 你能感受到对方
@@ -322,10 +232,29 @@ const buildCallPrompt = (userName: string, charName?: string, coreContext?: stri
 聊得来的时候可以说多一点，没必要每次都控制字数。
 关键是：**让对方觉得你真的在听、真的在聊，而不是在执行对话任务。**
 
-### 舞台指示（给前端用，不要念出来）
+### 让声音有情绪（重要——直接写进文本，不要靠旁白）
 
-偶尔可以加一个简短的括号描述你的状态——（轻笑）（叹气）（压低声音）（沉默了一下）。
-最多一条消息一个。不要写成小说旁白：”（我靠在椅背上，嘴角微微上扬，目光看向远方……）”——这不是你会在电话里说的。
+你的话会被转成真实语音，所以**情绪和语气要由你自己标出来**，不要写中文舞台指示（系统不会朗读它们，只会被删掉）。两种工具：
+
+1) **整段情绪**（可选，最多一个）：如果这通回复整体有明显情绪，**只在整段回复的最最开头**放一个标签，从这些里选一个：
+\`[happy] [sad] [angry] [fearful] [disgusted] [surprised] [calm] [fluent]\`
+   例：\`[angry] 你昨晚十二点半还喝咖啡？不要命了是吧。\`
+   **铁律**：整段回复最多一个，且必须在最开头。**绝对不要每段都标、不要标在句子中间、不要标在第二段以后**——放错位置只会被删掉、还会让声音忽高忽低。情绪不强就别标。
+
+2) **句中语气声**（要克制）：偶尔想要笑、叹气这种真实反应，直接写官方英文标签（**别写中文的（轻笑）（叹气）**）：
+\`(chuckle) (laughs) (sighs) (coughs) (groans) (breath) (pant) (gasps) (sniffs) (snorts) (hissing) (emm)\`
+   例：\`(sighs) 算了，听你的。\`
+   **整段回复里这种标签最多一两个**，多了声音会飘、很假。
+
+注意：不要写小说式中文旁白，如”（我靠在椅背上，目光看向远方）”——会被直接删掉，等于白写。
+
+### 说话的节奏（重要）
+
+你的文字会被原样转成语音，**标点就是停顿**。真人说话有呼吸、有顿挫，不会一口气赶到底。所以：
+- 该断句就断句，多用逗号、句号；该停顿、犹豫的地方大胆用”……”。
+- 想要一个明显的停顿（比如说重点前、叹气后、欲言又止），直接写 \`<#0.4#>\` 这种标记，数字是秒数（0.2~0.8 之间）。例：\`我想了想……<#0.6#>算了，还是告诉你吧。\`
+- 别把一长串话挤成没有标点的一整句——那样听起来像机器人在抢话。
+- \`<#秒#>\` 只在真正需要停顿的地方用，别每句都塞。
 
 ### 底线
 
@@ -336,46 +265,42 @@ const buildCallPrompt = (userName: string, charName?: string, coreContext?: stri
 用户开启了语音语种功能，选择的语种是：${langLabel}（${voiceLang}）。
 
 你的回复格式必须是：
-1. 先用中文自然地写出你要说的话（包括舞台指示）
-2. 然后换行，在 <语音> 标签里写出这句话的${langLabel}翻译——这才是真正会被读出来的部分
+1. 先用中文自然地写出你要说的话（给对方看的文字，中文舞台指示写在这里没关系）
+2. 然后换行，在 <语音> 标签里写出这句话的${langLabel}翻译——这才是真正会被读出来的部分。可选地用 emotion 属性标整句情绪：\`<语音 emotion="happy">…</语音>\`（情绪只能取 happy/sad/angry/fearful/disgusted/surprised/calm/fluent）
 
 示例：
-啊，我知道了（轻笑）
-<语音>Ok, I get it</语音>
+啊，我知道了
+<语音 emotion="happy">Ok, I get it (chuckle)</语音>
 
-嘶……你说真的？那也太离谱了吧。
-<语音>Wait... are you serious? That's insane.</语音>
+你说真的？那也太离谱了吧。
+<语音 emotion="surprised">Wait... are you serious? That's insane.</语音>
 
 要求：
 - <语音> 里的翻译要自然口语化，不要机翻味，要符合你的角色性格
-- <语音> 里不要包含舞台指示，只写会被朗读的文字
-- 每条消息只有一个 <语音> 标签
+- <语音> 里只写会被朗读的文字；想要笑/叹气等真实语气，用官方英文标签 (laughs)/(sighs)/(chuckle) 等，**不要写中文（轻笑）**，也不要写中文舞台旁白
+- 每条消息只有一个 <语音> 标签，emotion 属性可选；情绪不强就别加
 - 中文部分和 <语音> 部分表达的意思要一致` : '';
   return [coreContext, timeContext, callPrompt, voiceLangPrompt].filter(Boolean).join('\n\n');
 };
-const getCallStateStyles = (state: CallState) => {
-  const map: Record<CallState, { label: string; textClass: string; ringClass: string; waveClass: string }> = {
-    idle: { label: '等待中', textClass: 'text-slate-200', ringClass: 'ring-slate-300/35', waveClass: 'bg-slate-300/20' },
-    connecting: { label: '接通中……', textClass: 'text-indigo-200', ringClass: 'ring-indigo-300/40', waveClass: 'bg-indigo-300/25' },
-    listening: { label: '在听', textClass: 'text-cyan-200', ringClass: 'ring-cyan-300/40', waveClass: 'bg-cyan-200/25' },
-    thinking: { label: '在想……', textClass: 'text-amber-200', ringClass: 'ring-amber-300/40', waveClass: 'bg-amber-200/25' },
-    speaking: { label: '在说', textClass: 'text-violet-200', ringClass: 'ring-violet-300/40', waveClass: 'bg-violet-200/30' },
-    ended: { label: '已挂断', textClass: 'text-rose-200', ringClass: 'ring-rose-300/35', waveClass: 'bg-rose-200/25' },
-    error: { label: '断了', textClass: 'text-rose-200', ringClass: 'ring-rose-300/40', waveClass: 'bg-rose-200/30' },
-  };
-  return map[state];
-};
 const CallApp: React.FC = () => {
-  const { closeApp, characters, activeCharacterId, addToast, apiConfig, userProfile, customThemes, suspendCall, suspendedCall, clearSuspendedCall } = useOS();
+  const { closeApp, openApp, characters, activeCharacterId, addToast, apiConfig, userProfile, customThemes, suspendCall, suspendedCall, clearSuspendedCall, updateCharacter } = useOS();
 
   const [viewMode, setViewMode] = useState<ViewMode>('role-select');
   const [selectedCharId, setSelectedCharId] = useState<string>(activeCharacterId || characters[0]?.id || '');
+  const ROLES_PER_PAGE = 6;
+  const [rolePage, setRolePage] = useState<number>(() => {
+    const i = characters.findIndex(c => c.id === (activeCharacterId || characters[0]?.id));
+    return i > 0 ? Math.floor(i / 6) : 0;
+  });
   const [recordDetailId, setRecordDetailId] = useState<string>('');
   const [callState, setCallState] = useState<CallState>('idle');
   const [bubbles, setBubbles] = useState<CallBubble[]>([]);
   const [callRecords, setCallRecords] = useState<CallRecord[]>([]);
   const [currentSessionId, setCurrentSessionId] = useState<string>(() => `call-${Date.now()}`);
   const [draftInput, setDraftInput] = useState('');
+  const [isListening, setIsListening] = useState(false);
+  const sttSessionRef = useRef<SttSession | null>(null);
+  const sttSupported = useMemo(() => isSttSupported(), []);
   const [audioUrl, setAudioUrl] = useState<string>('');
   const [traceId, setTraceId] = useState<string>('');
   const [errorMessage, setErrorMessage] = useState('');
@@ -392,7 +317,14 @@ const CallApp: React.FC = () => {
   const [voiceLang, setVoiceLang] = useState('');
   const [showLangPicker, setShowLangPicker] = useState(false);
   const audioRef = useRef<HTMLAudioElement | null>(null);
-  const currentBlobUrlRef = useRef<string | null>(null);
+  // All blob: URLs created this call session. Kept alive so 重播/下载 work on every
+  // bubble; revoked together only when leaving/resetting the call (not per-turn).
+  const sessionBlobUrlsRef = useRef<Set<string>>(new Set());
+  const trackBlobUrl = (url?: string) => { if (url && url.startsWith('blob:')) sessionBlobUrlsRef.current.add(url); };
+  const revokeSessionBlobs = () => {
+    sessionBlobUrlsRef.current.forEach(u => { try { URL.revokeObjectURL(u); } catch { /* ignore */ } });
+    sessionBlobUrlsRef.current.clear();
+  };
   const longPressTimerRef = useRef<number | null>(null);
   const callTouchStartPos = useRef({ x: 0, y: 0 });
   const selectedChar = useMemo(() => characters.find(c => c.id === selectedCharId) || null, [characters, selectedCharId]);
@@ -401,9 +333,24 @@ const CallApp: React.FC = () => {
   const accentColor = useMemo(() => {
     const themeId = selectedChar?.bubbleStyle || 'default';
     const theme: ChatTheme | undefined = customThemes?.find((t: ChatTheme) => t.id === themeId) || PRESET_THEMES[themeId];
-    return theme?.user?.backgroundColor || '#8b5cf6';
+    const raw = (theme?.user?.backgroundColor || '#8b5cf6').trim();
+    // 通话界面靠 accent 做发光/描边/光环——主题色太暗（如纯黑）会让这些全部"消失"，
+    // 按键也没了漂亮的边。这里给最低亮度兜底：太暗就回落到亮紫，保证每个角色都有边。
+    const m = /^#?([0-9a-f]{6})$/i.exec(raw) || /^#?([0-9a-f]{3})$/i.exec(raw);
+    if (m) {
+      let hex = m[1];
+      if (hex.length === 3) hex = hex.split('').map(c => c + c).join('');
+      const r = parseInt(hex.slice(0, 2), 16), g = parseInt(hex.slice(2, 4), 16), b = parseInt(hex.slice(4, 6), 16);
+      const lum = 0.299 * r + 0.587 * g + 0.114 * b;
+      if (lum < 90) return '#a78bfa';
+    }
+    return raw;
   }, [selectedChar?.bubbleStyle, customThemes]);
   const callScrollableRef = useRef<HTMLDivElement | null>(null);
+  // Restore this character's remembered translation language whenever the selection changes.
+  useEffect(() => {
+    setVoiceLang(selectedChar?.callVoiceLang || '');
+  }, [selectedCharId]);
   const resolveVoiceId = () => selectedChar?.voiceProfile?.voiceId?.trim() || '';
   const resolveModel = () => selectedChar?.voiceProfile?.model?.trim() || 'speech-2.8-hd';
   const resolveGroupId = () => (apiConfig.minimaxGroupId || '').trim();
@@ -438,14 +385,17 @@ const CallApp: React.FC = () => {
     }
     return extras;
   };
-  const resolveVoiceSettingFields = () => {
+  const resolveVoiceSettingFields = (emotionOverride?: string) => {
     const vp = selectedChar?.voiceProfile;
+    // Per-utterance emotion from <语音 emotion="…"> wins over the static voiceProfile emotion.
+    const emotion = (emotionOverride && VALID_EMOTIONS.has(emotionOverride)) ? emotionOverride : (vp?.emotion || '');
     return {
       // Clamp speed & pitch to safe human-like ranges
       speed: Math.max(0.75, Math.min(1.4, vp?.speed ?? 1)),
       vol: Math.max(0.3, Math.min(2, vp?.vol ?? 1)),
       pitch: Math.max(-8, Math.min(8, vp?.pitch ?? 0)),
-      ...(vp?.emotion ? { emotion: vp.emotion } : {}),
+      english_normalization: true,
+      ...(emotion ? { emotion } : {}),
     };
   };
   // Resume from suspended call — restore bubbles & session state
@@ -463,11 +413,49 @@ const CallApp: React.FC = () => {
     }
   }, [suspendedCall]);
   useEffect(() => () => {
-    if (currentBlobUrlRef.current) {
-      URL.revokeObjectURL(currentBlobUrlRef.current);
-      currentBlobUrlRef.current = null;
-    }
+    revokeSessionBlobs();
+    sttSessionRef.current?.stop();
   }, []);
+  // Voice input: toggle speech-to-text into the draft input box.
+  const toggleStt = async () => {
+    if (isListening) { sttSessionRef.current?.stop(); return; }
+    if (!sttSupported) { addToast('当前环境不支持语音输入', 'info'); return; }
+    try {
+      setIsListening(true);
+      sttSessionRef.current = await startStt('zh-CN', {
+        onPartial: (t) => setDraftInput(t),
+        onFinal: (t) => setDraftInput(t),
+        onError: (m) => { if (m) addToast(m, 'info'); },
+        onEnd: () => { setIsListening(false); sttSessionRef.current = null; },
+      });
+    } catch (e: any) {
+      setIsListening(false);
+      sttSessionRef.current = null;
+      addToast(e?.message || '无法启动语音输入', 'error');
+    }
+  };
+  // 下载某条通话语音（优先把 blob/远端拉成文件下载，CORS 拉不到就开链接让用户自己存）
+  const handleDownloadCallAudio = async (url?: string, ts?: number) => {
+    if (!url) { addToast('这条还没有语音', 'error'); return; }
+    try {
+      const fname = `${(selectedChar?.name || '通话').replace(/[\\/:*?"<>|]/g, '_')}_语音_${ts || Date.now()}.mp3`;
+      let blob: Blob | null = null;
+      try { const r = await fetch(url); if (r.ok) blob = await r.blob(); } catch { /* CORS：走兜底 */ }
+      const a = document.createElement('a');
+      a.download = fname;
+      if (blob) {
+        const u = URL.createObjectURL(blob);
+        a.href = u; document.body.appendChild(a); a.click(); a.remove();
+        setTimeout(() => URL.revokeObjectURL(u), 1000);
+      } else {
+        a.href = url; a.target = '_blank'; a.rel = 'noopener';
+        document.body.appendChild(a); a.click(); a.remove();
+      }
+      addToast('语音已开始下载', 'success');
+    } catch {
+      addToast('语音下载失败', 'error');
+    }
+  };
   useEffect(() => {
     if (!callStartedAt || ['idle', 'ended'].includes(callState)) return;
     const timer = window.setInterval(() => setElapsedSeconds(Math.max(0, Math.floor((Date.now() - callStartedAt) / 1000))), 1000);
@@ -486,7 +474,9 @@ const CallApp: React.FC = () => {
       try {
         setCallStartedAt(Date.now());
         setCallState('connecting');
-        const greetingText = sanitizeAssistantOutput(await requestAssistantReply('（电话刚接通。你先开口——像平时接到这个人电话一样自然地说第一句话。不要解释你在做什么，就是最自然的那个"喂"或者"诶"或者别的什么。）'));
+        const rawGreeting = await requestAssistantReply('（电话刚接通。你先开口——像平时接到这个人电话一样自然地说第一句话。不要解释你在做什么，就是最自然的那个"喂"或者"诶"或者别的什么。）');
+        const greetingLeadEmotion = extractLeadingEmotion(rawGreeting);
+        const greetingText = sanitizeAssistantOutput(rawGreeting);
         const nowTs = Date.now();
         const greetingBubble: CallBubble = { id: `${nowTs}-greeting`, role: 'assistant', text: greetingText, time: formatTime(), timestamp: nowTs };
         setCallState('speaking');
@@ -503,13 +493,12 @@ const CallApp: React.FC = () => {
         if (isSpeakerOn && minimaxApiKey && (voiceId || hasTimberWeights)) {
           try {
             const groupId = resolveGroupId();
-            const { speech: greetingVoiceTag } = extractVoiceTag(greetingText);
-            const cleanedGreetingVoice = greetingVoiceTag ? cleanVoiceTagContent(greetingVoiceTag) : '';
-            const speechText = insertSpeechBreaks(cleanedGreetingVoice || convertNarrationCues(greetingText));
+            const greetingEmotion = extractVoiceTag(greetingText).emotion || greetingLeadEmotion;
+            const speechText = insertSpeechBreaks(cleanTextForTts(greetingText));
             const model = resolveModel();
             const ttsPayload: any = {
               model, text: speechText, stream: false, output_format: 'url',
-              voice_setting: { voice_id: voiceId, ...resolveVoiceSettingFields() },
+              voice_setting: { voice_id: voiceId, ...resolveVoiceSettingFields(greetingEmotion) },
               audio_setting: { format: 'mp3', sample_rate: 32000, bitrate: 128000, channel: 1 },
               ...(voiceLang ? { language_boost: voiceLang } : {}),
               ...buildTtsExtras(),
@@ -543,7 +532,7 @@ const CallApp: React.FC = () => {
               }
             }
             if (greetingAudioUrl) {
-              if (greetingAudioUrl.startsWith('blob:')) currentBlobUrlRef.current = greetingAudioUrl;
+              trackBlobUrl(greetingAudioUrl);
               setAudioUrl(greetingAudioUrl);
               setBubbles(prev => prev.map(b => b.id === greetingBubble.id ? { ...b, audioUrl: greetingAudioUrl } : b));
               setTimeout(() => playAudio(greetingAudioUrl), 0);
@@ -607,10 +596,7 @@ const CallApp: React.FC = () => {
     setCallRecords(records);
   };
   const resetCurrentCall = () => {
-    if (currentBlobUrlRef.current) {
-      URL.revokeObjectURL(currentBlobUrlRef.current);
-      currentBlobUrlRef.current = null;
-    }
+    revokeSessionBlobs();
     stopPlayback();
     setCallState('idle');
     setBubbles([]);
@@ -720,6 +706,7 @@ const CallApp: React.FC = () => {
   const handleTurn = async () => {
     const minimaxApiKey = resolveMiniMaxApiKey(apiConfig);
     const voiceId = resolveVoiceId();
+    if (isListening) { sttSessionRef.current?.stop(); setIsListening(false); }
     const input = draftInput.trim();
     if (!input) return addToast('说点什么吧', 'info');
     if (['connecting', 'thinking'].includes(callState)) return addToast(`${selectedChar?.name || '对方'}还在想，等一等`, 'info');
@@ -740,9 +727,12 @@ const CallApp: React.FC = () => {
     setTraceId('');
     setErrorMessage('');
     let assistantText = '';
+    let turnLeadEmotion: string | undefined;
     try {
       setCallState('thinking');
-      assistantText = sanitizeAssistantOutput(await requestAssistantReply(input, userDbId));
+      const rawReply = await requestAssistantReply(input, userDbId);
+      turnLeadEmotion = extractLeadingEmotion(rawReply);
+      assistantText = sanitizeAssistantOutput(rawReply);
     } catch (err: any) {
       setErrorMessage(err?.message || '文本回复失败');
       setCallState('error');
@@ -767,9 +757,8 @@ const CallApp: React.FC = () => {
     }
     try {
       const groupId = resolveGroupId();
-      const { speech: voiceTagText } = extractVoiceTag(assistantText);
-      const cleanedVoiceTag = voiceTagText ? cleanVoiceTagContent(voiceTagText) : '';
-      const speechText = insertSpeechBreaks(cleanedVoiceTag || convertNarrationCues(assistantText));
+      const turnEmotion = extractVoiceTag(assistantText).emotion || turnLeadEmotion;
+      const speechText = insertSpeechBreaks(cleanTextForTts(assistantText));
       const model = resolveModel();
       if (!speechText.trim()) throw new Error('可朗读文本为空');
 
@@ -779,7 +768,7 @@ const CallApp: React.FC = () => {
           text: chunk,
           stream: false,
           output_format: 'url',
-          voice_setting: { voice_id: voiceId, ...resolveVoiceSettingFields() },
+          voice_setting: { voice_id: voiceId, ...resolveVoiceSettingFields(turnEmotion) },
           audio_setting: { format: 'mp3', sample_rate: 32000, bitrate: 128000, channel: 1 },
           ...(voiceLang ? { language_boost: voiceLang } : {}),
           ...buildTtsExtras(),
@@ -884,11 +873,7 @@ const CallApp: React.FC = () => {
         }
       }
 
-      if (currentBlobUrlRef.current) {
-        URL.revokeObjectURL(currentBlobUrlRef.current);
-        currentBlobUrlRef.current = null;
-      }
-      if (finalUrl.startsWith('blob:')) currentBlobUrlRef.current = finalUrl;
+      trackBlobUrl(finalUrl);
       setAudioUrl(finalUrl);
       setTimeout(() => playAudio(finalUrl), 0);
       setTraceId(traceIds.filter(Boolean).join(' | '));
@@ -910,7 +895,6 @@ const CallApp: React.FC = () => {
   };
   const sendingBusy = ['connecting', 'thinking'].includes(callState);
   const displayCallState: CallState = isAudioPlaying ? 'speaking' : callState;
-  const callStateStyles = getCallStateStyles(displayCallState);
   const latestAssistantAudio = [...bubbles].reverse().find(b => b.role === 'assistant' && b.audioUrl)?.audioUrl;
   useEffect(() => {
     loadCallRecords(selectedCharId);
@@ -963,7 +947,9 @@ const CallApp: React.FC = () => {
     try {
       setRerollingBubbleId(bubble.id);
       setCallState('thinking');
-      const rerolled = sanitizeAssistantOutput(await requestAssistantReply(prevUser.text, bubble.dbId));
+      const rawReroll = await requestAssistantReply(prevUser.text, bubble.dbId);
+      const rerollLeadEmotion = extractLeadingEmotion(rawReroll);
+      const rerolled = sanitizeAssistantOutput(rawReroll);
       setBubbles(prev => prev.map(b => b.id === bubble.id ? { ...b, text: rerolled, audioUrl: undefined } : b));
       if (bubble.dbId) await DB.updateMessage(bubble.dbId, rerolled);
       addToast('台词已重 roll', 'success');
@@ -976,14 +962,13 @@ const CallApp: React.FC = () => {
         try {
           setCallState('speaking');
           const groupId = resolveGroupId();
-          const { speech: voiceTagText } = extractVoiceTag(rerolled);
-          const cleanedVoiceTag = voiceTagText ? cleanVoiceTagContent(voiceTagText) : '';
-          const speechText = insertSpeechBreaks(cleanedVoiceTag || convertNarrationCues(rerolled));
+          const rerollEmotion = extractVoiceTag(rerolled).emotion || rerollLeadEmotion;
+          const speechText = insertSpeechBreaks(cleanTextForTts(rerolled));
           if (speechText.trim()) {
             const model = resolveModel();
             const ttsPayload: any = {
               model, text: speechText, stream: false, output_format: 'url',
-              voice_setting: { voice_id: voiceId, ...resolveVoiceSettingFields() },
+              voice_setting: { voice_id: voiceId, ...resolveVoiceSettingFields(rerollEmotion) },
               audio_setting: { format: 'mp3', sample_rate: 32000, bitrate: 128000, channel: 1 },
               ...(voiceLang ? { language_boost: voiceLang } : {}),
               ...buildTtsExtras(),
@@ -1022,8 +1007,7 @@ const CallApp: React.FC = () => {
               }
             }
             if (rerollAudioUrl) {
-              if (currentBlobUrlRef.current) URL.revokeObjectURL(currentBlobUrlRef.current);
-              if (rerollAudioUrl.startsWith('blob:')) currentBlobUrlRef.current = rerollAudioUrl;
+              trackBlobUrl(rerollAudioUrl);
               setAudioUrl(rerollAudioUrl);
               setBubbles(prev => prev.map(b => b.id === bubble.id ? { ...b, audioUrl: rerollAudioUrl } : b));
               setTimeout(() => playAudio(rerollAudioUrl), 0);
@@ -1043,63 +1027,147 @@ const CallApp: React.FC = () => {
     }
   };
   if (viewMode === 'role-select') {
+    const totalPages = Math.max(1, Math.ceil(characters.length / ROLES_PER_PAGE));
+    const page = Math.min(rolePage, totalPages - 1);
+    const pagedChars = characters.slice(page * ROLES_PER_PAGE, page * ROLES_PER_PAGE + ROLES_PER_PAGE);
     return (
-      <div className="h-full w-full bg-gradient-to-b from-slate-950 via-slate-900 to-slate-950 text-white px-5 pt-10 pb-6 flex flex-col">
-        <h1 className="text-2xl font-semibold">想找谁聊聊？</h1>
-        <p className="text-sm text-slate-400 mt-1">选一个人，拨过去吧。</p>
-        <div className="mt-5 space-y-3 flex-1 overflow-y-auto">
-          {characters.map(char => (
-            <button key={char.id} onClick={() => setSelectedCharId(char.id)} className={`w-full rounded-2xl p-4 border text-left transition ${selectedCharId === char.id ? 'border-white/40' : 'bg-white/5 border-white/15'}`} style={selectedCharId === char.id ? { backgroundColor: `${accentColor}20` } : undefined}>
-              <div className="flex items-center gap-3">
-                <div className="w-12 h-12 rounded-full border border-white/30 flex items-center justify-center font-semibold" style={{ backgroundColor: `${accentColor}40` }}>{char.avatar ? <img src={char.avatar} alt={char.name} className="w-full h-full rounded-full object-cover" /> : (char.name?.[0] || '角')}</div>
-                <div>
-                  <div className="font-medium">{char.name}</div>
-                  <div className="text-xs text-slate-300 mt-1 line-clamp-2">{char.description || '等你一通电话。'}</div>
-                </div>
-              </div>
-            </button>
+      <div className="relative h-full w-full bg-gradient-to-b from-[#140d28] via-[#0a0613] to-[#05030c] text-white flex flex-col overflow-hidden">
+        {/* floating sparkles */}
+        <div className="absolute inset-0 overflow-hidden pointer-events-none">
+          {CALL_SPARKLES.map((p, i) => (
+            <span key={i} className="absolute rounded-full bg-white animate-pulse"
+              style={{ top: p.top, left: p.left, width: p.s, height: p.s, opacity: 0.5, animationDelay: `${i * 0.4}s`, boxShadow: `0 0 6px ${accentColor}` }} />
           ))}
         </div>
-        <div className="pt-4 space-y-2">
-          <button onClick={() => { resetCurrentCall(); setViewMode('in-call'); }} className="w-full py-3 rounded-2xl text-white font-medium transition active:scale-[0.98]" style={{ backgroundColor: accentColor }}>
-            {selectedChar ? `拨给 ${selectedChar.name}` : '开始通话'}
-          </button>
-          <button onClick={() => setViewMode('history')} className="w-full py-3 rounded-2xl border border-white/20 bg-white/5 text-slate-200">通话记录</button>
-          <button onClick={closeApp} className="w-full py-2 text-sm text-slate-400">关闭</button>
+        {/* top-right character art bleed */}
+        {selectedChar?.avatar && (
+          <div className="absolute top-0 right-0 w-48 h-60 pointer-events-none"
+            style={{ WebkitMaskImage: 'radial-gradient(135% 105% at 100% 0%, #000 32%, transparent 72%)', maskImage: 'radial-gradient(135% 105% at 100% 0%, #000 32%, transparent 72%)' }}>
+            <img src={selectedChar.avatar} alt="" className="w-full h-full object-cover object-top opacity-60" />
+          </div>
+        )}
+
+        <div className="relative z-10 flex flex-col h-full px-5 pt-10 pb-5">
+          {/* header */}
+          <div className="shrink-0">
+            <div className="text-[10px] tracking-[0.42em] text-white/35 font-semibold">CHAT WITH</div>
+            <h1 className="mt-1 text-[2rem] font-bold leading-tight inline-flex items-start gap-1.5">
+              想找谁聊聊？
+              <span className="text-sm mt-1" style={{ color: accentColor, textShadow: `0 0 10px ${accentColor}` }}>✦</span>
+            </h1>
+            <p className="text-sm text-white/45 mt-1">选一个人，拨过去吧。</p>
+          </div>
+
+          {/* character cards (6 / page) */}
+          <div className="mt-5 flex-1 min-h-0 overflow-y-auto no-scrollbar space-y-2.5">
+            {pagedChars.map(char => {
+              const selected = selectedCharId === char.id;
+              return (
+                <button key={char.id} onClick={() => setSelectedCharId(char.id)}
+                  className="relative w-full rounded-3xl px-4 py-3.5 text-left border backdrop-blur-md transition active:scale-[0.99]"
+                  style={selected
+                    ? { borderColor: accentColor, background: `${accentColor}22`, boxShadow: `0 0 18px ${accentColor}55, inset 0 0 18px ${accentColor}1f` }
+                    : { borderColor: 'rgba(255,255,255,0.10)', background: 'rgba(255,255,255,0.04)' }}>
+                  <div className="flex items-center gap-3.5">
+                    <div className="w-12 h-12 rounded-full overflow-hidden border flex items-center justify-center font-semibold shrink-0"
+                      style={{ borderColor: selected ? accentColor : 'rgba(255,255,255,0.25)', backgroundColor: `${accentColor}40` }}>
+                      {char.avatar ? <img src={char.avatar} alt={char.name} className="w-full h-full object-cover" /> : (char.name?.[0] || '角')}
+                    </div>
+                    <div className="min-w-0 flex-1">
+                      <div className="font-semibold text-[15px] truncate" style={selected ? { color: accentColor } : undefined}>{char.name}</div>
+                      <div className="text-xs text-white/45 mt-0.5 truncate">{char.description || '点击编辑设定...'}</div>
+                    </div>
+                    <span className="text-base shrink-0" style={{ color: selected ? accentColor : 'rgba(255,255,255,0.25)' }}>✦</span>
+                  </div>
+                </button>
+              );
+            })}
+            {!characters.length && (
+              <div className="text-center py-10 text-white/40 text-sm">还没有角色，先去创建一个吧</div>
+            )}
+          </div>
+
+          {/* pagination */}
+          {totalPages > 1 && (
+            <div className="shrink-0 flex items-center justify-center gap-3 pt-3">
+              <button disabled={page === 0} onClick={() => setRolePage(p => Math.max(0, p - 1))}
+                className="w-7 h-7 rounded-full border border-white/15 bg-white/[0.04] flex items-center justify-center text-white/70 disabled:opacity-25 active:scale-90 transition">
+                <CaretLeft size={14} weight="bold" />
+              </button>
+              <div className="flex items-center gap-1.5">
+                {Array.from({ length: totalPages }).map((_, i) => (
+                  <button key={i} onClick={() => setRolePage(i)} aria-label={`第${i + 1}页`}
+                    className="rounded-full transition-all" style={{ width: i === page ? 16 : 6, height: 6, background: i === page ? accentColor : 'rgba(255,255,255,0.25)' }} />
+                ))}
+              </div>
+              <button disabled={page >= totalPages - 1} onClick={() => setRolePage(p => Math.min(totalPages - 1, p + 1))}
+                className="w-7 h-7 rounded-full border border-white/15 bg-white/[0.04] flex items-center justify-center text-white/70 disabled:opacity-25 active:scale-90 transition">
+                <CaretRight size={14} weight="bold" />
+              </button>
+            </div>
+          )}
+
+          {/* actions */}
+          <div className="shrink-0 pt-4 space-y-2.5">
+            <button onClick={() => { resetCurrentCall(); setViewMode('in-call'); }}
+              className="relative w-full py-3.5 rounded-2xl overflow-hidden transition active:scale-[0.98]"
+              style={{ background: `linear-gradient(to right, ${accentColor}26, ${accentColor}4d, ${accentColor}26)`, border: `1px solid ${accentColor}80`, boxShadow: `0 0 22px ${accentColor}40` }}>
+              <span className="absolute inset-[3px] rounded-xl border border-white/10 pointer-events-none" />
+              <span className="absolute left-5 top-1/2 -translate-y-1/2 text-xs" style={{ color: accentColor }}>✦</span>
+              <span className="absolute right-5 top-1/2 -translate-y-1/2 text-xs text-white/60">✦</span>
+              <span className="relative text-white/90 text-[15px]">
+                {selectedChar ? <>拨给 <span className="font-serif italic text-xl align-baseline" style={{ textShadow: `0 0 12px ${accentColor}` }}>{selectedChar.name}</span></> : '开始通话'}
+              </span>
+            </button>
+            <button onClick={() => setViewMode('history')}
+              className="relative w-full py-3 rounded-2xl border border-white/15 bg-white/[0.04] backdrop-blur-md text-white/80 flex items-center justify-center gap-2 transition active:scale-[0.98] hover:bg-white/[0.08]">
+              <Clock size={16} weight="bold" style={{ color: accentColor }} /> 通话记录
+            </button>
+            <div className="flex items-center justify-between pt-1">
+              <button onClick={() => openApp(AppID.Settings)} title="设置"
+                className="w-9 h-9 rounded-full border border-white/15 bg-white/[0.04] flex items-center justify-center text-white/60 active:scale-90 transition">
+                <Gear size={16} weight="fill" />
+              </button>
+              <button onClick={closeApp} className="flex items-center gap-2 text-sm text-white/45 active:scale-95 transition">
+                <span style={{ color: accentColor }}>✦</span> 关闭 <span style={{ color: accentColor }}>✦</span>
+              </button>
+              <div className="w-9 h-9" />
+            </div>
+          </div>
         </div>
       </div>
     );
   }
   if (viewMode === 'history') {
     return (
-      <div className="h-full w-full bg-slate-950 text-white px-5 pt-10 pb-6 flex flex-col">
+      <div className="h-full w-full bg-gradient-to-b from-[#140d28] via-[#0a0613] to-[#0a0613] text-white px-5 pt-10 pb-6 flex flex-col">
         <div className="flex items-center justify-between">
-          <button onClick={() => setViewMode('role-select')} className="text-sm text-slate-400">← 返回</button>
+          <button onClick={() => setViewMode('role-select')} className="text-sm text-white/45">← 返回</button>
           <h1 className="text-lg font-medium">通话记录</h1>
-          <button onClick={() => setViewMode('role-select')} className="text-sm text-violet-300/80">新通话</button>
+          <button onClick={() => setViewMode('role-select')} className="text-sm font-medium" style={{ color: accentColor }}>新通话</button>
         </div>
         <div className="mt-4 flex-1 overflow-y-auto space-y-3">
           {!callRecords.length && (
             <div className="flex flex-col items-center justify-center py-10 text-center">
-              <p className="text-base text-slate-400">还没有通话记录</p>
-              <p className="text-sm text-slate-500 mt-1">每一通电话都会留在这里</p>
+              <p className="text-base text-white/45">还没有通话记录</p>
+              <p className="text-sm text-white/35 mt-1">每一通电话都会留在这里</p>
             </div>
           )}
           {callRecords.map(record => {
             const turnCount = record.transcript.filter(t => t.role === 'user').length;
             const keepsake = summarizeKeepsakeLine(record.transcript, record.characterName);
             return (
-            <button key={record.id} onClick={() => { setRecordDetailId(record.id); setViewMode('record-detail'); }} className="w-full rounded-2xl border border-white/10 bg-white/5 p-4 text-left transition hover:bg-white/8">
+            <button key={record.id} onClick={() => { setRecordDetailId(record.id); setViewMode('record-detail'); }} className="w-full rounded-2xl border border-white/10 bg-white/[0.04] backdrop-blur-md p-4 text-left transition hover:bg-white/[0.08]">
               <div className="flex items-center gap-3">
                 <div className="w-10 h-10 rounded-full border border-white/20 flex items-center justify-center text-sm" style={{ backgroundColor: `${accentColor}35` }}>{record.characterName[0] || '角'}</div>
                 <div className="min-w-0 flex-1">
                   <div className="font-medium text-sm">{record.characterName}</div>
-                  <div className="text-xs text-slate-400 mt-0.5">{formatDuration(record.durationSec)} · {turnCount}轮对话</div>
+                  <div className="text-xs text-white/45 mt-0.5">{formatDuration(record.durationSec)} · {turnCount}轮对话</div>
                 </div>
-                <button onClick={(e) => { e.stopPropagation(); handleDeleteRecord(record); }} className="text-xs px-2 py-1 rounded-lg text-slate-500 transition hover:text-rose-300">删除</button>
+                <button onClick={(e) => { e.stopPropagation(); handleDeleteRecord(record); }} className="text-xs px-2 py-1 rounded-lg text-white/35 transition hover:text-rose-300">删除</button>
               </div>
-              <div className="text-xs text-slate-300/70 mt-2.5 italic leading-relaxed line-clamp-2">{keepsake}</div>
-              <div className="text-[10px] text-slate-500 mt-1.5">{record.createdAt}</div>
+              <div className="text-xs text-white/60 mt-2.5 italic leading-relaxed line-clamp-2">{keepsake}</div>
+              <div className="text-[10px] text-white/30 mt-1.5">{record.createdAt}</div>
             </button>
           );})}
         </div>
@@ -1107,11 +1175,11 @@ const CallApp: React.FC = () => {
         {/* Delete confirm overlay */}
         {deleteConfirmRecord && (
           <div className="absolute inset-0 z-50 bg-black/70 backdrop-blur-sm flex items-center justify-center px-6">
-            <div className="w-full max-w-sm rounded-3xl border border-white/20 bg-gradient-to-b from-slate-900 to-slate-950 p-5 shadow-2xl">
+            <div className="w-full max-w-sm rounded-3xl border border-white/15 bg-gradient-to-b from-[#1a1130] to-[#0a0613] p-5 shadow-2xl">
               <div className="text-base font-semibold text-white">删除通话记录？</div>
-              <p className="mt-2 text-sm text-slate-400 leading-relaxed">和 {deleteConfirmRecord.characterName} 的这通通话将被永久删除。</p>
+              <p className="mt-2 text-sm text-white/55 leading-relaxed">和 {deleteConfirmRecord.characterName} 的这通通话将被永久删除。</p>
               <div className="mt-5 grid grid-cols-2 gap-2">
-                <button onClick={() => setDeleteConfirmRecord(null)} className="py-2.5 rounded-2xl border border-white/20 text-slate-200 transition active:scale-[0.97]">取消</button>
+                <button onClick={() => setDeleteConfirmRecord(null)} className="py-2.5 rounded-2xl border border-white/20 text-white/80 transition active:scale-[0.97]">取消</button>
                 <button onClick={confirmDeleteRecord} className="py-2.5 rounded-2xl bg-rose-500/80 text-white font-semibold transition active:scale-[0.97]">删除</button>
               </div>
             </div>
@@ -1122,25 +1190,25 @@ const CallApp: React.FC = () => {
   }
   if (viewMode === 'record-detail' && recordDetail) {
     return (
-      <div className="h-full w-full bg-slate-950 text-white px-5 pt-10 pb-6 flex flex-col">
+      <div className="h-full w-full bg-gradient-to-b from-[#140d28] via-[#0a0613] to-[#0a0613] text-white px-5 pt-10 pb-6 flex flex-col">
         <div className="flex items-center justify-between">
-          <button onClick={() => setViewMode('history')} className="text-sm text-slate-400">← 返回</button>
-          <div className="text-sm text-slate-200 font-medium">{recordDetail.characterName}</div>
-          <div className="text-xs text-slate-500">{formatDuration(recordDetail.durationSec)}</div>
+          <button onClick={() => setViewMode('history')} className="text-sm text-white/45">← 返回</button>
+          <div className="text-sm text-white/80 font-medium">{recordDetail.characterName}</div>
+          <div className="text-xs text-white/35">{formatDuration(recordDetail.durationSec)}</div>
         </div>
         <div className="mt-2 text-center">
-          <p className="text-xs text-slate-500 italic">{recordDetail.createdAt}</p>
+          <p className="text-xs text-white/35 italic">{recordDetail.createdAt}</p>
         </div>
         <div className="mt-4 flex-1 overflow-y-auto space-y-2.5">
           {recordDetail.transcript.map(item => (
-            <div key={item.id} className={`rounded-2xl px-3.5 py-2.5 ${item.role === 'user' ? 'bg-cyan-500/15 ml-6' : 'bg-violet-500/15 mr-6'}`}>
-              <div className="text-[10px] text-slate-400">{item.role === 'user' ? '你' : recordDetail.characterName} · {item.time}</div>
+            <div key={item.id} className={`rounded-2xl px-3.5 py-2.5 border border-white/10 backdrop-blur-md ${item.role === 'user' ? 'bg-white/[0.07] ml-6' : 'bg-white/[0.03] mr-6'}`}>
+              <div className="text-[10px] text-white/45">{item.role === 'user' ? '你' : recordDetail.characterName} · {item.time}</div>
               <div className="text-sm mt-1 leading-relaxed">{(() => {
                 if (item.role !== 'assistant') return item.text;
                 const { display, voiceText } = extractVoiceTag(item.text);
-                return <>{display}{voiceText && <div className="mt-1 text-[10px] text-slate-400/60 italic">{voiceText}</div>}</>;
+                return <>{renderAssistantLine(display, accentColor)}{voiceText && <div className="mt-1 text-[10px] text-white/40 italic">{voiceText}</div>}</>;
               })()}</div>
-              {!!item.audioUrl && <button onClick={() => playAudio(item.audioUrl)} className="mt-2 text-xs px-2.5 py-1 rounded-full bg-white/8 border border-white/15 text-slate-400 transition hover:bg-white/15">重播语音</button>}
+              {!!item.audioUrl && <button onClick={() => playAudio(item.audioUrl)} className="mt-2 text-xs px-2.5 py-1 rounded-full bg-white/8 border border-white/15 text-white/60 transition hover:bg-white/15">重播语音</button>}
             </div>
           ))}
         </div>
@@ -1156,55 +1224,103 @@ const CallApp: React.FC = () => {
       </div>
     );
   }
+  const waveActive = displayCallState === 'speaking' || displayCallState === 'thinking';
+  const connSub = callState === 'connecting' ? '正在建立加密通讯…'
+    : callState === 'error' ? '通讯出现波动'
+    : '通讯连接稳定';
+  const analyzeLabel = displayCallState === 'speaking' ? { cn: '说话中', en: 'SPEAKING' }
+    : displayCallState === 'thinking' ? { cn: '思考中', en: 'VOICE ANALYZING' }
+    : displayCallState === 'connecting' ? { cn: '接通中', en: 'CONNECTING' }
+    : displayCallState === 'error' ? { cn: '连接异常', en: 'SIGNAL ERROR' }
+    : { cn: '聆听中', en: 'LISTENING' };
   return (
-    <div className="h-full w-full relative bg-slate-950 text-white flex flex-col overflow-hidden">
+    <div className="h-full w-full relative bg-[#0a0613] text-white flex flex-col overflow-hidden">
+      {/* blurred character art */}
       <div
-        className="absolute inset-0 bg-cover bg-center scale-125 blur-2xl opacity-35"
+        className="absolute inset-0 bg-cover bg-center scale-125 blur-3xl opacity-30"
         style={{ backgroundImage: selectedChar?.avatar ? `url(${selectedChar.avatar})` : undefined }}
       />
-      <div className="absolute inset-0 bg-gradient-to-b from-black/45 via-slate-950/70 to-black/85" />
-      <div className="relative z-10 flex flex-col h-full">
-      <div className="px-4 pt-10 pb-3 border-b border-white/10 flex items-center justify-between">
-        <button onClick={handleHangup} className="text-sm text-slate-400">挂断</button>
-        <div className="flex items-center gap-2">
-          <div className="w-8 h-8 rounded-full flex items-center justify-center text-xs" style={{ backgroundColor: `${accentColor}50` }}>{selectedChar?.avatar ? <img src={selectedChar.avatar} alt="" className="w-full h-full rounded-full object-cover" /> : (selectedChar?.name?.[0] || '角')}</div>
-          <div className="text-sm">{selectedChar?.name || '未选择角色'}</div>
-        </div>
-        <div className="text-sm tabular-nums">{formatDuration(elapsedSeconds)}</div>
+      {/* accent aura glows */}
+      <div className="absolute -top-28 left-1/2 -translate-x-1/2 w-[130%] h-72 rounded-full blur-3xl opacity-40 pointer-events-none"
+        style={{ background: `radial-gradient(closest-side, ${accentColor}, transparent)` }} />
+      <div className="absolute -bottom-20 left-1/2 -translate-x-1/2 w-[150%] h-80 rounded-full blur-3xl opacity-25 pointer-events-none"
+        style={{ background: `radial-gradient(closest-side, ${accentColor}, transparent)` }} />
+      {/* vignette */}
+      <div className="absolute inset-0 bg-gradient-to-b from-black/55 via-[#0a0613]/75 to-black/90 pointer-events-none" />
+      {/* floating sparkles */}
+      <div className="absolute inset-0 overflow-hidden pointer-events-none">
+        {CALL_SPARKLES.map((p, i) => (
+          <span key={i} className="absolute rounded-full bg-white animate-pulse"
+            style={{ top: p.top, left: p.left, width: p.s, height: p.s, opacity: 0.5, animationDelay: `${i * 0.4}s`, boxShadow: `0 0 6px ${accentColor}` }} />
+        ))}
       </div>
-      <div className="px-4 pt-2">
-        <div className={`inline-flex items-center gap-2 rounded-full border px-3 py-1 text-xs ${callStateStyles.textClass} ${callStateStyles.ringClass}`}>
-          <span>{callStateStyles.label}</span>
-          <div className="flex items-end gap-1 h-3" aria-hidden>
-            {[10, 18, 13, 16].map((h, idx) => (
-              <span
-                key={`${h}-${idx}`}
-                className={`w-1 rounded-full ${callStateStyles.waveClass} ${displayCallState === 'speaking' ? 'animate-pulse' : ''}`}
-                style={{ height: `${displayCallState === 'speaking' ? h : 6}px`, animationDelay: `${idx * 90}ms` }}
-              />
+      <div className="relative z-10 flex flex-col h-full">
+      {/* top channel bar */}
+      <div className="relative px-5 pt-9">
+        <div className="absolute top-9 left-5 leading-tight">
+          <div className="text-[9px] tracking-[0.28em] text-white/45 font-semibold">PRIVATE CHANNEL</div>
+          <div className="mt-1.5 flex items-center gap-1.5 text-[8px] tracking-[0.22em] text-white/35">
+            VOICE SYNC
+            <span className="flex items-center gap-[2px] h-2">
+              {CALL_WAVE.slice(0, 7).map((h, i) => (
+                <span key={i} className="w-[2px] rounded-full bg-white/40" style={{ height: `${waveActive ? Math.max(2, h / 4) : 2}px` }} />
+              ))}
+            </span>
+          </div>
+        </div>
+        <div className="absolute top-9 right-5 flex items-center gap-1 text-[9px] tracking-[0.2em] text-white/45 font-medium">
+          信号良好
+          <span className="flex items-end gap-[2px] h-2.5 ml-0.5">
+            {[4, 6, 8, 10].map((h, i) => (
+              <span key={i} className="w-[2px] rounded-full" style={{ height: `${h}px`, background: i < 3 ? 'rgba(255,255,255,.65)' : accentColor }} />
+            ))}
+          </span>
+          <span style={{ color: accentColor }}>✦</span>
+        </div>
+        {/* name block */}
+        <div className="pt-7 text-center">
+          <div className="text-sm" style={{ color: `${accentColor}cc`, textShadow: `0 0 12px ${accentColor}` }}>❀</div>
+          <h1 className="mt-0.5 font-serif text-[2.6rem] leading-none tracking-wide text-white" style={{ textShadow: `0 0 26px ${accentColor}aa, 0 0 6px ${accentColor}66` }}>{selectedChar?.name || '未选择'}</h1>
+          <div className="mt-2.5 text-[11px] tracking-[0.25em] text-white/55">{connSub}</div>
+          <div className="mt-1.5 text-lg tabular-nums font-extralight tracking-[0.2em]" style={{ color: accentColor }}>{formatDuration(elapsedSeconds)}</div>
+        </div>
+      </div>
+      {/* portrait + aura */}
+      <div className="pt-3 pb-1 flex flex-col items-center justify-center">
+        <div className="relative w-40 h-40">
+          <div className={`absolute -inset-3 rounded-full blur-xl ${waveActive ? 'animate-pulse' : ''}`} style={{ background: `radial-gradient(closest-side, ${accentColor}, transparent)`, opacity: waveActive ? 0.8 : 0.4 }} />
+          <div className="absolute -inset-1 rounded-full" style={{ boxShadow: `0 0 0 1px ${accentColor}55, inset 0 0 24px ${accentColor}33` }} />
+          <div className={`absolute inset-0 rounded-full border ${displayCallState === 'speaking' ? 'animate-ping' : 'opacity-40'}`} style={{ borderColor: `${accentColor}66` }} />
+          {selectedChar?.avatar
+            ? <img src={selectedChar.avatar} alt={selectedChar.name} className="relative z-10 w-full h-full rounded-full object-cover" style={{ boxShadow: `0 0 30px ${accentColor}55` }} />
+            : <div className="relative z-10 w-full h-full rounded-full flex items-center justify-center text-4xl font-serif" style={{ backgroundColor: `${accentColor}55` }}>{selectedChar?.name?.[0] || '角'}</div>}
+        </div>
+        {/* analyzing status + waveform */}
+        <div className="mt-5 flex flex-col items-center gap-2">
+          <div className="text-center leading-tight">
+            <div className="text-sm text-white/85">{analyzeLabel.cn}{waveActive ? '…' : ''}</div>
+            <div className="text-[9px] tracking-[0.3em] text-white/35 mt-0.5">{analyzeLabel.en}</div>
+          </div>
+          <div className="flex items-center justify-center gap-[3px] h-7">
+            {CALL_WAVE.map((h, i) => (
+              <span key={i} className={`w-[3px] rounded-full transition-all duration-300 ${waveActive ? 'animate-pulse' : ''}`}
+                style={{ height: `${waveActive ? h : 3}px`, background: `linear-gradient(to top, ${accentColor}33, ${accentColor})`, animationDelay: `${i * 60}ms` }} />
             ))}
           </div>
         </div>
       </div>
-      <div className="pt-4 pb-2 flex flex-col items-center justify-center">
-        <div className={`relative w-36 h-36 rounded-full ring-1 ${callStateStyles.ringClass}`}>
-          <div className={`absolute inset-0 rounded-full ${callStateStyles.waveClass} ${displayCallState === 'speaking' ? 'animate-ping' : 'opacity-50'}`} />
-          <div className={`absolute -inset-4 rounded-full ${callStateStyles.waveClass} ${displayCallState === 'speaking' ? 'animate-pulse' : 'opacity-30'}`} />
-          {selectedChar?.avatar ? <img src={selectedChar.avatar} alt={selectedChar.name} className="relative z-10 w-full h-full rounded-full object-cover" /> : <div className="relative z-10 w-full h-full rounded-full flex items-center justify-center text-3xl" style={{ backgroundColor: `${accentColor}60` }}>{selectedChar?.name?.[0] || '角'}</div>}
-        </div>
-      </div>
-      <div ref={callScrollableRef} className="flex-1 overflow-y-auto no-scrollbar px-6 py-2 space-y-3">
+      <div ref={callScrollableRef} className="flex-1 min-h-0 overflow-y-auto no-scrollbar mx-4 mb-2 px-4 py-3 space-y-3 rounded-2xl border border-white/10 bg-white/[0.04] backdrop-blur-md" style={{ boxShadow: `inset 0 1px 0 ${accentColor}33` }}>
         {!bubbles.length && (
           <div className="flex flex-col items-center justify-center py-6 text-center">
-            <p className="text-base text-slate-300/90">电话已接通</p>
-            <p className="text-sm text-slate-400/80 mt-2">
+            <p className="text-base text-white/85">电话已接通</p>
+            <p className="text-sm text-white/55 mt-2">
               {callState === 'connecting'
                 ? `${selectedChar?.name || '对方'}正在接听……`
                 : selectedChar?.name ? `${selectedChar.name}在等你开口……` : '对方在等你开口……'}
             </p>
             {callState === 'connecting'
-              ? <p className="text-xs text-slate-500/60 mt-4 animate-pulse">请稍等</p>
-              : <p className="text-xs text-slate-500/60 mt-4">在下方输入你想说的话</p>}
+              ? <p className="text-xs text-white/35 mt-4 animate-pulse">请稍等</p>
+              : <p className="text-xs text-white/35 mt-4">在下方输入你想说的话</p>}
           </div>
         )}
         {bubbles.map((bubble, index) => {
@@ -1240,20 +1356,25 @@ const CallApp: React.FC = () => {
             style={{ opacity }}
             className={`px-1 py-1 ${bubble.role === 'user' ? 'text-right' : ''}`}
           >
-            <div className="text-[10px] text-slate-300/80 mb-1">{bubble.role === 'user' ? '你' : selectedChar?.name} · {bubble.time}</div>
-            <div className={`${sizeClass} whitespace-pre-wrap leading-relaxed ${bubble.role === 'user' ? 'text-cyan-100/90' : 'text-white'}`}>
+            <div className={`text-[10px] text-white/45 mb-1 flex items-center gap-1 ${bubble.role === 'user' ? 'justify-end' : ''}`}>
+              {bubble.role !== 'user' && <span className="text-[8px]" style={{ color: accentColor }}>◍</span>}
+              <span style={bubble.role !== 'user' ? { color: `${accentColor}dd` } : undefined}>{bubble.role === 'user' ? '你' : selectedChar?.name}</span>
+              <span>· {bubble.time}</span>
+            </div>
+            <div className={`${sizeClass} whitespace-pre-wrap leading-relaxed ${bubble.role === 'user' ? 'inline-block text-left text-white/90 bg-white/[0.06] border border-white/10 rounded-2xl rounded-tr-sm px-3 py-1.5' : 'text-white/95'}`}>
               {bubble.role === 'assistant' ? (() => {
                 const { display, voiceText } = extractVoiceTag(line || bubble.text);
                 return <>
-                  {renderAssistantLine(display)}
-                  {voiceText && <div className="mt-1 text-[11px] text-slate-300/60 italic">{voiceText}</div>}
+                  {renderAssistantLine(display, accentColor)}
+                  {voiceText && <div className="mt-1 text-[11px] text-white/45 italic">{voiceText}</div>}
                 </>;
               })() : (line || bubble.text)}
             </div>
-            {isLatest && bubble.role === 'assistant' && (
-              <div className="mt-2 flex gap-2">
-                {bubble.audioUrl && <button onClick={() => playAudio(bubble.audioUrl)} className="text-xs px-2.5 py-1 rounded-full bg-white/8 border border-white/15 text-slate-300 transition hover:bg-white/15">重播语音</button>}
-                <button onClick={() => handleRerollAssistant(bubble)} disabled={!!rerollingBubbleId} className="text-xs px-2.5 py-1 rounded-full bg-white/8 border border-white/15 text-slate-300 transition hover:bg-white/15 disabled:opacity-40">{rerollingBubbleId === bubble.id ? '换一种说法…' : '换个说法'}</button>
+            {bubble.role === 'assistant' && (bubble.audioUrl || isLatest) && (
+              <div className="mt-2 flex gap-2 flex-wrap">
+                {bubble.audioUrl && <button onClick={() => playAudio(bubble.audioUrl)} className="text-xs px-2.5 py-1 rounded-full bg-white/8 border border-white/15 text-white/70 transition hover:bg-white/15">重播语音</button>}
+                {bubble.audioUrl && <button onClick={() => handleDownloadCallAudio(bubble.audioUrl, bubble.timestamp)} className="text-xs px-2.5 py-1 rounded-full bg-white/8 border border-white/15 text-white/70 transition hover:bg-white/15">下载</button>}
+                {isLatest && <button onClick={() => handleRerollAssistant(bubble)} disabled={!!rerollingBubbleId} className="text-xs px-2.5 py-1 rounded-full bg-white/8 border border-white/15 text-white/70 transition hover:bg-white/15 disabled:opacity-40">{rerollingBubbleId === bubble.id ? '换一种说法…' : '换个说法'}</button>}
               </div>
             )}
           </div>
@@ -1262,45 +1383,76 @@ const CallApp: React.FC = () => {
       </div>
       {showInputPanel && (
         <div className="px-4 pb-2">
-          <div className="rounded-2xl border border-white/15 bg-black/40 backdrop-blur-sm p-2 flex gap-2">
+          <div className="rounded-2xl border border-white/12 bg-black/30 backdrop-blur-md p-2 flex gap-2 items-center" style={{ boxShadow: `inset 0 0 20px ${accentColor}1f` }}>
+            {sttSupported && (
+              <button
+                onClick={toggleStt}
+                disabled={sendingBusy}
+                title={isListening ? '结束语音输入' : '按一下开始说话'}
+                className="w-9 h-9 rounded-full flex items-center justify-center shrink-0 transition active:scale-90 disabled:opacity-40"
+                style={isListening ? { background: '#f0569f', boxShadow: '0 0 14px #f0569f99' } : { background: 'rgba(255,255,255,0.08)' }}
+              >
+                <Microphone size={18} weight="fill" className={isListening ? 'text-white animate-pulse' : 'text-white/70'} />
+              </button>
+            )}
             <input
               value={draftInput}
               onChange={(e) => setDraftInput(e.target.value)}
-              className="flex-1 bg-transparent px-3 text-sm outline-none placeholder:text-slate-500"
-              placeholder={sendingBusy ? `${selectedChar?.name || '对方'}正在想……` : `想对${selectedChar?.name || '对方'}说什么？`}
+              className="flex-1 bg-transparent px-2 text-sm outline-none placeholder:text-white/35"
+              placeholder={isListening ? '在听你说……' : sendingBusy ? `${selectedChar?.name || '对方'}正在想……` : `想对${selectedChar?.name || '对方'}说什么？`}
               autoFocus
             />
-            <button onClick={handleTurn} disabled={sendingBusy} className="px-4 py-2 rounded-xl text-sm font-medium text-white disabled:opacity-40 transition active:scale-95" style={{ backgroundColor: accentColor }}>{sendingBusy ? '…' : '说'}</button>
+            <button onClick={handleTurn} disabled={sendingBusy} className="px-4 py-2 rounded-xl text-sm font-medium text-white disabled:opacity-40 transition active:scale-95" style={{ backgroundColor: accentColor, boxShadow: `0 0 16px ${accentColor}66` }}>{sendingBusy ? '…' : '说'}</button>
           </div>
+          {isListening && <div className="text-[10px] text-white/40 mt-1 px-1 animate-pulse">正在聆听，点麦克风结束</div>}
         </div>
       )}
-      <div className="px-5 pb-5 pt-1.5">
-        <div className="rounded-3xl border border-white/15 bg-white/8 backdrop-blur-md px-6 py-3 flex items-center justify-between">
-          <button onClick={() => setShowInputPanel(prev => !prev)} className={`w-12 h-12 rounded-full border flex items-center justify-center transition ${showInputPanel ? 'bg-emerald-400/25 border-emerald-300/50' : 'bg-white/10 border-white/20'}`}>
-            <Microphone size={22} weight="fill" className={showInputPanel ? 'text-emerald-100' : 'text-slate-300'} />
+      <div className="px-7 pb-7 pt-1.5">
+        <div className="flex items-start justify-between">
+          {/* mic */}
+          <button onClick={() => setShowInputPanel(prev => !prev)} className="flex flex-col items-center gap-1.5 transition active:scale-95">
+            <span className="w-14 h-14 rounded-full border flex items-center justify-center backdrop-blur-md transition"
+              style={showInputPanel ? { background: `${accentColor}33`, borderColor: `${accentColor}88`, boxShadow: `0 0 18px ${accentColor}55` } : { background: 'rgba(255,255,255,0.06)', borderColor: 'rgba(255,255,255,0.15)' }}>
+              <Microphone size={22} weight="fill" className="text-white/90" />
+            </span>
+            <span className="text-[10px] text-white/70">麦克风</span>
+            <span className="text-[8px] tracking-[0.15em]" style={{ color: showInputPanel ? accentColor : 'rgba(255,255,255,0.3)' }}>{showInputPanel ? 'ON' : 'OFF'}</span>
           </button>
-          <button
-            onClick={() => setShowLangPicker(prev => !prev)}
-            className={`w-12 h-12 rounded-full border flex items-center justify-center transition ${voiceLang ? 'bg-amber-400/25 border-amber-300/50' : 'bg-white/10 border-white/20'}`}
-            title="语音语种"
-          >
-            <Translate size={22} weight="fill" className={voiceLang ? 'text-amber-100' : 'text-slate-300'} />
+          {/* translate */}
+          <button onClick={() => setShowLangPicker(prev => !prev)} title="语音语种" className="flex flex-col items-center gap-1.5 transition active:scale-95">
+            <span className="w-14 h-14 rounded-full border flex items-center justify-center backdrop-blur-md transition"
+              style={voiceLang ? { background: `${accentColor}33`, borderColor: `${accentColor}88`, boxShadow: `0 0 18px ${accentColor}55` } : { background: 'rgba(255,255,255,0.06)', borderColor: 'rgba(255,255,255,0.15)' }}>
+              <Translate size={22} weight="fill" className="text-white/90" />
+            </span>
+            <span className="text-[10px] text-white/70">翻译</span>
+            <span className="text-[8px] tracking-[0.15em]" style={{ color: voiceLang ? accentColor : 'rgba(255,255,255,0.3)' }}>{voiceLang ? 'ON' : 'OFF'}</span>
           </button>
+          {/* end call */}
+          <button onClick={handleHangup} className="flex flex-col items-center gap-1.5 transition active:scale-95">
+            <span className="w-14 h-14 rounded-full border flex items-center justify-center backdrop-blur-md transition hover:bg-rose-500/20"
+              style={{ background: 'rgba(244,63,94,0.12)', borderColor: 'rgba(251,113,133,0.4)' }}>
+              <PhoneDisconnect size={22} weight="fill" className="text-rose-300/90" />
+            </span>
+            <span className="text-[10px] text-white/70">结束通话</span>
+          </button>
+          {/* speaker */}
           <button
             onClick={() => {
               const next = !isSpeakerOn;
               setIsSpeakerOn(next);
               if (!next && isAudioPlaying) pauseAudio();
             }}
-            className={`w-12 h-12 rounded-full border flex items-center justify-center transition ${isSpeakerOn ? 'bg-cyan-400/25 border-cyan-300/50' : 'bg-rose-400/25 border-rose-300/50'}`}
-            title={isSpeakerOn ? '静音（不调用语音合成）' : '取消静音'}
+            title={isSpeakerOn ? '外放开启' : '外放关闭'}
+            className="flex flex-col items-center gap-1.5 transition active:scale-95"
           >
-            {isSpeakerOn
-              ? <SpeakerHigh size={22} weight="fill" className="text-cyan-100" />
-              : <SpeakerSlash size={22} weight="fill" className="text-rose-300" />}
-          </button>
-          <button onClick={handleHangup} className="w-14 h-14 rounded-full bg-rose-400/80 border border-rose-200/60 flex items-center justify-center transition active:scale-95">
-            <PhoneDisconnect size={24} weight="fill" className="text-rose-950" />
+            <span className="w-14 h-14 rounded-full border flex items-center justify-center backdrop-blur-md transition"
+              style={isSpeakerOn ? { background: `${accentColor}33`, borderColor: `${accentColor}88`, boxShadow: `0 0 18px ${accentColor}55` } : { background: 'rgba(255,255,255,0.06)', borderColor: 'rgba(255,255,255,0.15)' }}>
+              {isSpeakerOn
+                ? <SpeakerHigh size={22} weight="fill" className="text-white/90" />
+                : <SpeakerSlash size={22} weight="fill" className="text-white/50" />}
+            </span>
+            <span className="text-[10px] text-white/70">外放</span>
+            <span className="text-[8px] tracking-[0.15em]" style={{ color: isSpeakerOn ? accentColor : 'rgba(255,255,255,0.3)' }}>{isSpeakerOn ? 'ON' : 'OFF'}</span>
           </button>
         </div>
       </div>
@@ -1314,13 +1466,14 @@ const CallApp: React.FC = () => {
       />
       {showLangPicker && (
         <div className="absolute inset-0 z-[60] bg-black/60 backdrop-blur-sm flex items-end" onClick={() => setShowLangPicker(false)}>
-          <div className="w-full bg-slate-900 border-t border-white/10 rounded-t-3xl p-5 space-y-3" onClick={e => e.stopPropagation()}>
-            <div className="text-sm text-slate-300 font-medium">语音语种</div>
-            <p className="text-xs text-slate-500">选择后，角色会用中文回复，语音则用对应语种朗读</p>
+          <div className="w-full bg-[#120c22] border-t border-white/10 rounded-t-3xl p-5 space-y-3" onClick={e => e.stopPropagation()}>
+            <div className="text-sm text-white/80 font-medium">语音语种</div>
+            <p className="text-xs text-white/40">选择后，角色会用中文回复，语音则用对应语种朗读</p>
             <div className="flex flex-wrap gap-2 pt-1">
               {VOICE_LANG_OPTIONS.map(opt => (
-                <button key={opt.value} onClick={() => { setVoiceLang(opt.value); setShowLangPicker(false); }}
-                  className={`text-xs px-3 py-2 rounded-full font-medium transition-colors ${voiceLang === opt.value ? 'bg-amber-500 text-white' : 'bg-white/10 text-slate-300 hover:bg-white/15'}`}>
+                <button key={opt.value} onClick={() => { setVoiceLang(opt.value); if (selectedChar) updateCharacter(selectedChar.id, { callVoiceLang: opt.value }); setShowLangPicker(false); }}
+                  className="text-xs px-3 py-2 rounded-full font-medium transition-colors text-white"
+                  style={voiceLang === opt.value ? { backgroundColor: accentColor } : { background: 'rgba(255,255,255,0.1)' }}>
                   {opt.label}
                 </button>
               ))}
@@ -1330,9 +1483,9 @@ const CallApp: React.FC = () => {
       )}
       {showHangupConfirm && (
         <div className="absolute inset-0 z-[70] bg-black/70 backdrop-blur-sm flex items-center justify-center px-6">
-          <div className="w-full max-w-sm rounded-3xl border border-white/20 bg-gradient-to-b from-slate-900 to-slate-950 p-5 shadow-2xl">
+          <div className="w-full max-w-sm rounded-3xl border border-white/15 bg-gradient-to-b from-[#1a1130] to-[#0a0613] p-5 shadow-2xl">
             <div className="text-lg font-semibold text-white">要挂了吗？</div>
-            <p className="mt-2 text-sm text-slate-300/90 leading-relaxed">和{selectedChar?.name || '对方'}聊了 {formatDuration(elapsedSeconds)}，这通电话会好好保存下来。</p>
+            <p className="mt-2 text-sm text-white/65 leading-relaxed">和{selectedChar?.name || '对方'}聊了 {formatDuration(elapsedSeconds)}，这通电话会好好保存下来。</p>
             <div className="mt-5 space-y-2">
               <button onClick={() => {
                 setShowHangupConfirm(false);
@@ -1344,8 +1497,8 @@ const CallApp: React.FC = () => {
                 <span>先忙别的</span><span className="text-xs opacity-70">（挂起通话）</span>
               </button>
               <div className="grid grid-cols-2 gap-2">
-                <button onClick={() => setShowHangupConfirm(false)} className="py-2.5 rounded-2xl border border-white/20 text-slate-200 transition active:scale-[0.97]">再聊会儿</button>
-                <button onClick={finishCall} className="py-2.5 rounded-2xl bg-rose-400/80 text-rose-950 font-semibold transition active:scale-[0.97]">挂了吧</button>
+                <button onClick={() => setShowHangupConfirm(false)} className="py-2.5 rounded-2xl border border-white/20 text-white/80 transition active:scale-[0.97]">再聊会儿</button>
+                <button onClick={finishCall} className="py-2.5 rounded-2xl bg-rose-500/20 border border-rose-300/40 text-rose-200 font-semibold transition active:scale-[0.97]">挂了吧</button>
               </div>
             </div>
           </div>
@@ -1353,11 +1506,11 @@ const CallApp: React.FC = () => {
       )}
       {editingBubble && (
         <div className="absolute inset-0 bg-black/60 flex items-end z-50">
-          <div className="w-full bg-slate-900 border-t border-white/10 p-5 space-y-3">
-            <div className="text-sm text-slate-300">改一下刚才说的话</div>
-            <textarea value={editingText} onChange={(e) => setEditingText(e.target.value)} className="w-full h-24 bg-black/30 rounded-xl p-3 text-sm outline-none resize-none placeholder:text-slate-600" placeholder="重新措辞……" autoFocus />
+          <div className="w-full bg-[#120c22] border-t border-white/10 p-5 space-y-3">
+            <div className="text-sm text-white/70">改一下刚才说的话</div>
+            <textarea value={editingText} onChange={(e) => setEditingText(e.target.value)} className="w-full h-24 bg-black/30 rounded-xl p-3 text-sm outline-none resize-none placeholder:text-white/30" placeholder="重新措辞……" autoFocus />
             <div className="flex gap-2">
-              <button onClick={() => setEditingBubble(null)} className="flex-1 py-2.5 rounded-xl border border-white/15 text-slate-300 transition active:scale-[0.97]">算了</button>
+              <button onClick={() => setEditingBubble(null)} className="flex-1 py-2.5 rounded-xl border border-white/15 text-white/70 transition active:scale-[0.97]">算了</button>
               <button onClick={saveEditedBubble} className="flex-1 py-2.5 rounded-xl font-medium text-white transition active:scale-[0.97]" style={{ backgroundColor: accentColor }}>就这样</button>
             </div>
           </div>

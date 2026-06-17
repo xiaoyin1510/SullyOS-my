@@ -11,8 +11,17 @@
  * 抽到这里后单点维护。
  */
 
-import type { Message } from '../types';
+import type { Message, Emoji } from '../types';
 import { formatLifeSimResetCardForContext } from './lifeSimChatCard';
+
+/**
+ * 表情包消息的 content 存的是图床 URL，本身不带名字。拼上下文时要靠这个反查出
+ * 当初设的表情名（关键字），非识图模型才能"看见"对方发了什么表情。
+ * 私聊主历史、群聊主历史都从这里取名，避免一处查一处漏（群聊曾漏查，只给 [表情包]）。
+ */
+export function stickerNameFromUrl(emojis: Emoji[], url: string): string {
+    return emojis.find(e => e.url === url)?.name || '未知表情';
+}
 
 /** 仅返回内容体（不加 sender / timestamp）。调用方自行拼外层。 */
 export function normalizeMessageContent(

@@ -1128,7 +1128,7 @@ const BankDollhouse: React.FC<Props> = ({
                     <div
                         className="w-full rounded-t-3xl bg-gradient-to-b from-white to-[#FFFCF7] max-h-[65vh] overflow-hidden flex flex-col"
                         onClick={(e) => e.stopPropagation()}
-                        style={{ paddingBottom: 'max(0.75rem, env(safe-area-inset-bottom))' }}
+                        style={{ paddingBottom: 'max(0.75rem, var(--safe-bottom, 0px))' }}
                     >
                         {/* Panel Header */}
                         <div className="flex items-center justify-between px-4 pt-4 pb-2">

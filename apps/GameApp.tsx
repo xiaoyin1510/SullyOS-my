@@ -82,15 +82,26 @@ const parseWorldGen = (raw: string): { title: string; worldSetting: string } => 
     // 情况②：看起来像 JSON（即使被截断）—— 用正则抠字段，不依赖 JSON.parse
     if (/"?worldSetting"?\s*:/.test(text) || /^\s*\{/.test(text)) {
         const tMatch = text.match(/"?title"?\s*:\s*"((?:[^"\\]|\\.)*)"/);
-        // worldSetting 可能未闭合（被截断），所以允许匹配到结尾
+        // worldSetting 可能未闭合（被截断），所以允许匹配到结尾。失败兜底：从 worldSetting": " 之后切到末尾，剥掉可能的尾闭合符号。
         const wMatch = text.match(/"?worldSetting"?\s*:\s*"((?:[^"\\]|\\.)*?)(?:"\s*[},]|"\s*$|$)/);
         if (tMatch) title = tMatch[1];
-        if (wMatch) worldSetting = wMatch[1];
-        // 还原被转义的字符
-        const unescape = (s: string) => s.replace(/\\n/g, '\n').replace(/\\t/g, '\t').replace(/\\"/g, '"').replace(/\\\\/g, '\\');
+        if (wMatch) {
+            worldSetting = wMatch[1];
+        } else {
+            // 极端情况（尾部孤反斜杠等导致整段 wMatch 直接 null）：粗暴 slice 把 worldSetting": " 之后的尾巴当原文，杜绝 title 抠到但正文空的回归。
+            const tailIdx = text.search(/"?worldSetting"?\s*:\s*"/);
+            if (tailIdx >= 0) {
+                worldSetting = text.slice(tailIdx).replace(/^"?worldSetting"?\s*:\s*"/, '').replace(/\\?"?\s*\}?\s*$/, '');
+            }
+        }
+        // 还原被转义的字符：单次扫描，避免 `\\n`（被转义的反斜杠 + 字面 n）被先一步替换成 `\` + 换行。\\uXXXX 也顺手解码。
+        const unescape = (s: string) => s
+            .replace(/\\u([0-9a-fA-F]{4})/g, (_, hex) => String.fromCharCode(parseInt(hex, 16)))
+            .replace(/\\(["\\nt])/g, (_, c) => c === 'n' ? '\n' : c === 't' ? '\t' : c);
         title = unescape(title);
         worldSetting = unescape(worldSetting);
-        if (worldSetting || title) return { title: title.trim(), worldSetting: worldSetting.trim() };
+        // 只在 worldSetting 真抠到时早退，否则继续落到下面的原文 parser——避免 title 抠到、正文空时返回半截结果。
+        if (worldSetting) return { title: title.trim(), worldSetting: worldSetting.trim() };
     }
 
     // 情况①：分隔符格式
@@ -972,6 +983,8 @@ ${logText}
         const resetGame: GameSession = {
             ...activeGame,
             logs: [initialLog],
+            // 漏清 summaries 会让旧前情提要继续显示在「已归档剧情」并被注入下一轮 GM prompt → 串档。一并清掉 UI 展开状态。
+            summaries: [],
             status: {
                 location: 'Start Point',
                 health: 100,
@@ -985,6 +998,8 @@ ${logText}
 
         await DB.saveGame(resetGame);
         setActiveGame(resetGame);
+        setShowArchived(false);
+        setExpandedSummaries(new Set());
         setShowSystemMenu(false);
         addToast('游戏已重置', 'success');
     };
@@ -1236,7 +1251,7 @@ Output: A concise summary in Chinese (e.g. "探索了地牢并击败了史莱姆
                 {games.length > LOBBY_PAGE_SIZE && (() => {
                     const totalPages = Math.ceil(games.length / LOBBY_PAGE_SIZE);
                     return (
-                        <div className="flex items-center justify-center gap-4 px-6 pb-[calc(1rem+env(safe-area-inset-bottom))] pt-2 shrink-0 z-10">
+                        <div className="flex items-center justify-center gap-4 px-6 pb-[calc(1rem+var(--safe-bottom,0px))] pt-2 shrink-0 z-10">
                             <button
                                 onClick={() => setLobbyPage(p => Math.max(0, p - 1))}
                                 disabled={lobbyPage === 0}
@@ -1445,7 +1460,7 @@ Output: A concise summary in Chinese (e.g. "探索了地牢并击败了史莱姆
                 </div>
 
                 {/* 底部开始按钮 */}
-                <div className="p-4 pb-[calc(1rem+env(safe-area-inset-bottom))] border-t border-white/5 bg-black/40 backdrop-blur-md z-10">
+                <div className="p-4 pb-[calc(1rem+var(--safe-bottom,0px))] border-t border-white/5 bg-black/40 backdrop-blur-md z-10">
                     <button
                         onClick={handleCreateGame}
                         disabled={isCreating || !canStart}
@@ -1711,7 +1726,7 @@ Output: A concise summary in Chinese (e.g. "探索了地牢并击败了史莱姆
 
             {/* 多选转发操作栏 */}
             {selectMode && (
-                <div className={`p-4 pb-[calc(1rem+env(safe-area-inset-bottom))] border-t ${theme.border} bg-black/50 backdrop-blur shrink-0 z-20 flex items-center gap-3 animate-slide-down`}>
+                <div className={`p-4 pb-[calc(1rem+var(--safe-bottom,0px))] border-t ${theme.border} bg-black/50 backdrop-blur shrink-0 z-20 flex items-center gap-3 animate-slide-down`}>
                     <button onClick={exitSelectMode} className="px-4 h-11 rounded-xl border border-white/15 text-sm font-bold text-white/70 active:scale-95 transition-transform">取消</button>
                     <span className="text-xs text-white/50 flex-1 text-center">已选 {selectedLogIds.size} 条 · 长按可多选剧情</span>
                     <button
@@ -1725,8 +1740,8 @@ Output: A concise summary in Chinese (e.g. "探索了地牢并击败了史莱姆
             )}
 
             {/* Controls */}
-            {/* Added pb-[env(safe-area-inset-bottom)] to ensure content clears home bar on full screen devices */}
-            <div className={`p-4 pb-[calc(1rem+env(safe-area-inset-bottom))] border-t ${theme.border} bg-opacity-90 backdrop-blur shrink-0 z-20 transition-colors duration-500 ${selectMode ? 'hidden' : ''}`}>
+            {/* 底部 pb-[calc(1rem+var(--safe-bottom,0px))] 让内容避开 home 条（--safe-bottom 见 index.html，iOS PWA 下有 JS probe 兜底）*/}
+            <div className={`p-4 pb-[calc(1rem+var(--safe-bottom,0px))] border-t ${theme.border} bg-opacity-90 backdrop-blur shrink-0 z-20 transition-colors duration-500 ${selectMode ? 'hidden' : ''}`}>
                 
                 {/* AI Suggested Options Area */}
                 {activeGame.suggestedActions && activeGame.suggestedActions.length > 0 && !isTyping && (

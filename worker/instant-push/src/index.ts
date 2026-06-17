@@ -62,7 +62,9 @@ const MULTIPART_TRANSPORT = { enabled: true };
 const UTILITY_CORS_HEADERS = {
   'Access-Control-Allow-Origin': '*',
   'Access-Control-Allow-Methods': 'GET, POST, OPTIONS',
-  'Access-Control-Allow-Headers': 'Content-Type, Authorization, X-Client-Token',
+  // X-Amsg-Request-Encoding: 大请求体 gzip 上行用的自定义头 (见 decodeGzipRequestBody)。
+  // 跨域带它会触发 CORS 预检, 必须放行, 否则浏览器拦请求。amsg-instant 库的预检不含它, 故 worker 自己回预检。
+  'Access-Control-Allow-Headers': 'Content-Type, Authorization, X-Client-Token, X-Amsg-Request-Encoding',
   'Access-Control-Max-Age': '86400',
 };
 const D1_BLOB_TABLE = 'amsg_transient_blobs';
@@ -95,6 +97,14 @@ const ERROR_EVENT_TYPES = new Set([
 ]);
 
 const TRACE_EVENT_TYPES = new Set([
+  // 主链路里程碑: 一次会话的完整叙事是
+  //   request → llm_start → llm_done → push_sent×N (前台还有 sse_payload_enqueued)
+  // llm_start 和 llm_done 之间的安静期 = 在等上游 LLM, 不是卡死。
+  'request',
+  'llm_start',
+  'llm_done',
+  'push_sent',
+  'multipart_sent',
   'sse_stream_aborted',
   'sse_stream_canceled',
   'sse_payload_enqueued',
@@ -109,13 +119,59 @@ const TRACE_EVENT_TYPES = new Set([
   'wait_until_failed',
 ]);
 
+// 「断开后还活着多久」侦察兵: 客户端断开 SSE 后每 10s 打一条心跳,
+// 日志里最后一条 post_abort_alive 的 sinceAbortMs ≈ 平台实际给的
+// 断开后存活窗口 (CF 文档值是 30s, Deno Deploy 没有书面值, 靠这个量)。
+// 心跳一旦停了而 backup_push_sent 还没出现 = 进程在那一刻被回收。
+// 最多陪跑 5 分钟, 防止刷屏。
+const POST_ABORT_HEARTBEAT_MS = 10_000;
+const POST_ABORT_HEARTBEAT_MAX_TICKS = 30;
+const postAbortWatchers = new Map<string, ReturnType<typeof setInterval>>();
+
+function startPostAbortHeartbeat(sessionId: string): void {
+  if (postAbortWatchers.has(sessionId)) return;
+  const abortedAt = Date.now();
+  let ticks = 0;
+  const timer = setInterval(() => {
+    ticks += 1;
+    console.log('[instant-push:trace]', {
+      type: 'post_abort_alive',
+      sessionId,
+      sinceAbortMs: Date.now() - abortedAt,
+    });
+    if (ticks >= POST_ABORT_HEARTBEAT_MAX_TICKS) {
+      clearInterval(timer);
+      postAbortWatchers.delete(sessionId);
+    }
+  }, POST_ABORT_HEARTBEAT_MS);
+  postAbortWatchers.set(sessionId, timer);
+}
+
+// 失败类事件的 cause 通常是个 Error 对象 (push 失败时带 statusCode, 如 413 = payload 超
+// 推送服务上限)。CF 日志直接打 Error 经常序列化成空对象, 把关键字段摊平成普通字段才看得见。
+function flattenAmsgEvent(e: { type: string; [k: string]: unknown }): Record<string, unknown> {
+  const cause = (e as any).cause;
+  if (cause == null) return e;
+  return {
+    ...e,
+    cause: undefined,
+    causeName: cause?.name,
+    causeMessage: cause?.message ?? String(cause),
+    causeStatus: cause?.statusCode ?? cause?.status,
+  };
+}
+
 function traceAmsgEvent(e: { type: string; [k: string]: unknown }): void {
+  if (e.type === 'sse_stream_aborted' && typeof e.sessionId === 'string') {
+    startPostAbortHeartbeat(e.sessionId);
+  }
+  const formatted = flattenAmsgEvent(e);
   if (ERROR_EVENT_TYPES.has(e.type)) {
-    console.error('[instant-push]', e);
+    console.error('[instant-push]', formatted);
     return;
   }
   if (TRACE_EVENT_TYPES.has(e.type)) {
-    console.log('[instant-push:trace]', e);
+    console.log('[instant-push:trace]', formatted);
   }
 }
 
@@ -484,9 +540,69 @@ async function runEmotionEval(body: any): Promise<string> {
  * 并行调度副 API 情绪评估 + 推 emotion_update. 主回复的 LLM 生成 + 切段 + 推送
  * 由 amsg-instant Cloudflare adapter 接收 ctx 后自己挂进 waitUntil.
  */
+/**
+ * 给 SSE 响应补防压缩 / 防缓冲头, 再原样转发库返回的流式 Response。
+ *
+ * 库 (amsg-instant) 内部把 SSE 响应头写死成 text/event-stream + Cache-Control: no-cache,
+ * 没法配。问题排查时怀疑: 边缘 / 中间层若对这条流做压缩或缓冲, 每秒一发的 `: keepalive`
+ * 小帧会被攒在缓冲里不实时下发, 客户端看着像 idle → 到连接寿命上限被掐。
+ * 加 `no-transform` (CF 文档的禁边缘改写开关) + `X-Accel-Buffering: no` (nginx 类反代禁缓冲提示)
+ * 把这条路堵上。只动 text/event-stream 响应, JSON / 204 / blob 原样放行。
+ * 注意: 不设 `Content-Encoding: identity` —— 手动声明编码可能和流式传输打架, 反而引新坑;
+ * text/event-stream 本就不在 CF 自动压缩名单里, no-transform 已足够。
+ */
+function withSseAntiBufferingHeaders(resp: Response): Response {
+  const contentType = resp.headers.get('content-type') || '';
+  if (!contentType.includes('text/event-stream')) return resp;
+  const headers = new Headers(resp.headers);
+  headers.set('Cache-Control', 'no-cache, no-transform');
+  headers.set('X-Accel-Buffering', 'no');
+  return new Response(resp.body, {
+    status: resp.status,
+    statusText: resp.statusText,
+    headers,
+  });
+}
+
+/**
+ * 大请求体 gzip 上行解码。amsg-client 2.7+ 在 body 超阈值时会 gzip 压缩、带自定义头
+ * `X-Amsg-Request-Encoding: gzip` 发原始压缩字节 —— iOS 上行把 ~322KB 压到 ~50KB,
+ * 绕开「大 body 上传撑过 ~42s 被中间层掐」那条链路。
+ *
+ * 这里在 worker 入口把它解压回普通 JSON Request, 后续 `.json()` / amsg-instant 读 body
+ * 全程无感。**故意用自定义头而非标准 `Content-Encoding`**: 标准头会被 CF / 代理自动解压,
+ * 双重解压会炸; 自定义头只有我们自己认, 链路中间不碰。
+ *
+ * 没这个头 (旧客户端 / 客户端 CompressionStream 不可用时回退明文) 原样返回, 向后兼容。
+ */
+async function decodeGzipRequestBody(request: Request): Promise<Request> {
+  if (request.headers.get('x-amsg-request-encoding') !== 'gzip' || !request.body) {
+    return request;
+  }
+  const decompressed = await new Response(
+    request.body.pipeThrough(new DecompressionStream('gzip')),
+  ).arrayBuffer();
+  const headers = new Headers(request.headers);
+  headers.delete('x-amsg-request-encoding');
+  headers.delete('content-length'); // 解压后长度变了, 删掉让运行时自算
+  return new Request(request.url, {
+    method: request.method,
+    headers,
+    body: decompressed,
+  });
+}
+
 export default {
   fetch: async (request: Request, env: Env, ctx: { waitUntil(p: Promise<unknown>): void }) => {
     const url = new URL(request.url);
+
+    // CORS 预检自处理：amsg-instant 库的预检 Allow-Headers 写死且不含压缩用的
+    // X-Amsg-Request-Encoding，跨域带该头的预检会被它拦死。抢在库之前回我们自己的
+    // 预检响应（放行列表见 UTILITY_CORS_HEADERS），与 version/capabilities 分支一致。
+    if (request.method === 'OPTIONS') {
+      return new Response(null, { status: 204, headers: UTILITY_CORS_HEADERS });
+    }
+
     if (url.pathname === '/version') {
       return handleVersionRequest(request);
     }
@@ -494,9 +610,23 @@ export default {
       return handleCapabilitiesRequest(request, env);
     }
 
+    // 大请求体走 gzip 上行时, 入口先解压成普通 Request, 后面 .json() / cfWorker 全程无感。
+    let decodedRequest: Request;
+    try {
+      decodedRequest = await decodeGzipRequestBody(request);
+    } catch {
+      return new Response(JSON.stringify({ error: 'Failed to decompress request body' }), {
+        status: 400,
+        headers: {
+          ...UTILITY_CORS_HEADERS,
+          'Content-Type': 'application/json',
+        },
+      });
+    }
+
     let body: any = null;
     try {
-      body = await request.clone().json();
+      body = await decodedRequest.clone().json();
     } catch {
       body = null; // 非 JSON / 解析失败: 不影响主路径
     }
@@ -505,7 +635,8 @@ export default {
     scheduleD1BlobCleanup(workerEnv, ctx);
 
     // 主回复由 amsg-instant 内部的 onBeforeLoop / waitUntil 驱动。
-    return await (cfWorker as any).fetch(request, workerEnv, ctx);
+    const resp = await (cfWorker as any).fetch(decodedRequest, workerEnv, ctx);
+    return withSseAntiBufferingHeaders(resp);
   },
   async scheduled(_event: unknown, env: Env) {
     const workerEnv = await prepareBlobStoreEnv(env);

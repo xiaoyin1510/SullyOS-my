@@ -1,8 +1,9 @@
 
 import React, { useState, useRef, useEffect } from 'react';
 import { useOS } from '../../context/OSContext';
-import { CharacterProfile, SpriteConfig, SkinSet } from '../../types';
+import { CharacterProfile, SpriteConfig, SkinSet, DateStyleConfig } from '../../types';
 import { processImage } from '../../utils/file';
+import { DATE_STYLE_PRESETS } from '../../utils/datePrompts';
 
 // 标准情绪列表
 const REQUIRED_EMOTIONS = ['normal', 'happy', 'angry', 'sad', 'shy'];
@@ -14,8 +15,29 @@ interface DateSettingsProps {
 }
 
 const DateSettings: React.FC<DateSettingsProps> = ({ char, onBack }) => {
-    const { updateCharacter, addToast } = useOS();
+    const { updateCharacter, addToast, userProfile } = useOS();
     const fileInputRef = useRef<HTMLInputElement>(null);
+
+    // 文风与叙事（即时生效：system prompt 每次请求重建，存上就影响下一条回复）
+    const styleConfig = char.dateStyleConfig || {};
+    const [extraDraft, setExtraDraft] = useState(styleConfig.extra || '');
+    useEffect(() => { setExtraDraft(char.dateStyleConfig?.extra || ''); }, [char.id]);
+    const patchStyleConfig = (patch: Partial<DateStyleConfig>) => {
+        updateCharacter(char.id, { dateStyleConfig: { ...(char.dateStyleConfig || {}), ...patch } });
+    };
+    const saveExtraDraft = () => {
+        const trimmed = extraDraft.trim();
+        if (trimmed === (char.dateStyleConfig?.extra || '')) return;
+        patchStyleConfig({ extra: trimmed || undefined });
+        addToast(trimmed ? '补充要求已保存' : '补充要求已清空', 'success');
+    };
+    const userName = userProfile?.name || '用户';
+    const POV_OPTIONS: { id: DateStyleConfig['pov']; label: string; example: string }[] = [
+        { id: undefined, label: '默认', example: '不额外指定，随模型发挥' },
+        { id: 'third-name', label: '第三人称 · 称名字', example: `${char.name}看着${userName}` },
+        { id: 'third-you', label: '第三人称 · 称"你"', example: `${char.name}看着你` },
+        { id: 'first-you', label: '第一人称', example: '我看着你' },
+    ];
 
     const [uploadTarget, setUploadTarget] = useState<'bg' | 'sprite' | 'skin-sprite'>('bg');
     const [targetEmotionKey, setTargetEmotionKey] = useState<string>('');
@@ -235,6 +257,80 @@ const DateSettings: React.FC<DateSettingsProps> = ({ char, onBack }) => {
                         >
                             <div className={`absolute top-0.5 w-6 h-6 bg-white rounded-full shadow-md transition-transform ${char.dateLightReading ? 'translate-x-5' : 'translate-x-0.5'}`}></div>
                         </button>
+                    </div>
+                </section>
+
+                <section className="bg-white p-4 rounded-2xl border border-slate-100 shadow-sm">
+                    <h3 className="text-xs font-bold text-slate-400 uppercase">文风与叙事 (Writing Style)</h3>
+                    <p className="text-[11px] text-slate-400 mt-1 mb-4">调整见面时 AI 的写作风格与叙事人称，修改后从下一条回复开始生效。</p>
+
+                    {/* 写作风格 */}
+                    <div className="mb-5">
+                        <label className="text-[11px] text-slate-500 font-bold mb-2 block">写作风格</label>
+                        <div className="flex flex-wrap gap-2">
+                            {DATE_STYLE_PRESETS.map(p => {
+                                const active = (styleConfig.style || 'cinematic') === p.id;
+                                return (
+                                    <button
+                                        key={p.id}
+                                        onClick={() => patchStyleConfig({ style: p.id })}
+                                        className={`px-3.5 py-2 rounded-full text-xs font-bold transition-all active:scale-95 ${active ? 'bg-primary text-white shadow-md shadow-primary/20' : 'bg-slate-100 text-slate-500 hover:bg-slate-200'}`}
+                                    >
+                                        {p.label}
+                                    </button>
+                                );
+                            })}
+                        </div>
+                        <p className="text-[11px] text-slate-400 mt-2 leading-relaxed">
+                            {DATE_STYLE_PRESETS.find(p => p.id === (styleConfig.style || 'cinematic'))?.hint}
+                        </p>
+                    </div>
+
+                    {/* 叙事人称 */}
+                    <div className="mb-5">
+                        <label className="text-[11px] text-slate-500 font-bold mb-2 block">叙事人称</label>
+                        <div className="space-y-2">
+                            {POV_OPTIONS.map(opt => {
+                                const active = styleConfig.pov === opt.id;
+                                return (
+                                    <button
+                                        key={opt.id || 'default'}
+                                        onClick={() => patchStyleConfig({ pov: opt.id })}
+                                        className={`w-full flex items-center justify-between px-4 py-3 rounded-xl border text-left transition-all active:scale-[0.98] ${active ? 'border-primary bg-primary/5 ring-1 ring-primary/20' : 'border-slate-100 bg-slate-50 hover:bg-slate-100'}`}
+                                    >
+                                        <span className={`text-xs font-bold ${active ? 'text-primary' : 'text-slate-600'}`}>{opt.label}</span>
+                                        <span className="text-[11px] text-slate-400 italic">{opt.example}</span>
+                                    </button>
+                                );
+                            })}
+                        </div>
+                    </div>
+
+                    {/* 细节深挖引导 */}
+                    <div className="mb-5 flex items-center justify-between">
+                        <div className="pr-4">
+                            <label className="text-[11px] text-slate-500 font-bold block">细节深挖引导</label>
+                            <p className="text-[11px] text-slate-400 mt-1 leading-relaxed">教 AI 从任何一句话里挖出可写的细节，并每轮给一条不同的聚焦线索，减少空话和模型口癖。</p>
+                        </div>
+                        <button
+                            onClick={() => patchStyleConfig({ digDeeper: styleConfig.digDeeper === false ? undefined : false })}
+                            className={`w-12 h-7 rounded-full transition-colors relative shrink-0 ${styleConfig.digDeeper !== false ? 'bg-primary' : 'bg-slate-200'}`}
+                        >
+                            <div className={`absolute top-0.5 w-6 h-6 bg-white rounded-full shadow-md transition-transform ${styleConfig.digDeeper !== false ? 'translate-x-5' : 'translate-x-0.5'}`}></div>
+                        </button>
+                    </div>
+
+                    {/* 自定义补充 */}
+                    <div>
+                        <label className="text-[11px] text-slate-500 font-bold mb-2 block">自定义补充（可选）</label>
+                        <textarea
+                            value={extraDraft}
+                            onChange={e => setExtraDraft(e.target.value)}
+                            onBlur={saveExtraDraft}
+                            placeholder="比如：多写环境互动；不要写心理活动；对话占比多一些……"
+                            className="w-full h-20 px-4 py-3 bg-slate-100 rounded-xl text-sm resize-none focus:ring-1 focus:ring-primary/30 outline-none transition-all leading-relaxed"
+                        />
+                        <p className="text-[10px] text-slate-300 mt-1">失焦自动保存，会原样追加进提示词，优先级高于风格预设。</p>
                     </div>
                 </section>
 

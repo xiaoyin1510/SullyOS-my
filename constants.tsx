@@ -35,6 +35,7 @@ import {
   Newspaper,
   Planet,
   Wrench,
+  HouseLine,
 } from '@phosphor-icons/react';
 
 // SVG 图标库 - Phosphor Icons
@@ -74,6 +75,7 @@ export const Icons: Record<string, React.FC<{ className?: string }>> = {
   HotNews: ({ className }) => <Newspaper className={className} weight="fill" />,
   VRWorld: ({ className }) => <Planet className={className} weight="bold" />,
   CharCreatorDev: ({ className }) => <Wrench className={className} weight="fill" />,
+  WorldHome: ({ className }) => <HouseLine className={className} weight="bold" />,
 };
 
 export const INSTALLED_APPS: AppConfig[] = [
@@ -83,6 +85,8 @@ export const INSTALLED_APPS: AppConfig[] = [
   { id: AppID.Call, name: '电话', icon: 'Call', color: 'emerald' },
   { id: AppID.GroupChat, name: '群聊', icon: 'GroupChat', color: 'violet' },
   { id: AppID.Room, name: '小小窝', icon: 'Room', color: 'rose' },
+  // 家园不再做独立桌面图标，改从「小小窝 · 像素家园」里进入（openApp(AppID.WorldHome) 仍可渲染）
+  // { id: AppID.WorldHome, name: '家园', icon: 'WorldHome', color: 'emerald' },
   { id: AppID.CheckPhone, name: '查手机', icon: 'CheckPhone', color: 'slate' },
   // { id: AppID.Browser, name: '浏览器', icon: 'Browser', color: 'blue' }, // Hidden
   { id: AppID.Date, name: '见面', icon: 'Date', color: 'pink' },

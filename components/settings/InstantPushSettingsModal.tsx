@@ -10,6 +10,7 @@ import {
   probeInstantWorkerCapabilities,
   probeInstantWorkerVersion,
   copyInstantWorkerBundleToClipboard,
+  copyDenoLoaderToClipboard,
   buildCloudflareDashboardUrl,
   normalizeWorkerUrl,
 } from '../../utils/instantPushClient';
@@ -52,6 +53,7 @@ export const InstantPushSettingsModal: React.FC<InstantPushSettingsModalProps> =
   const [capabilityStatusKind, setCapabilityStatusKind] = useState<'idle' | 'loading' | 'success' | 'warning' | 'error'>('idle');
   const [capabilityBusy, setCapabilityBusy] = useState(false);
   const [copyStatus, setCopyStatus] = useState('');
+  const [denoCopyStatus, setDenoCopyStatus] = useState('');
   // 对比已部署的 worker 自报版本: 'idle' 初始, 'checking' 拉取中, 'latest' 完全匹配, 'stale' 任何
   // 不匹配 (拉不到 / 旧 bundle 没 /version / 版本对不上). 故意不展开 stale 的子情况 —— 对用户而言
   // 都是"该重新部署"。staleDetail 仅用于在 stale 时给出可读的原因 (HTTP xxx / 网络错误等)。
@@ -84,6 +86,7 @@ export const InstantPushSettingsModal: React.FC<InstantPushSettingsModalProps> =
     setCapabilityStatus('');
     setCapabilityStatusKind('idle');
     setCopyStatus('');
+    setDenoCopyStatus('');
     setVersionCheck('idle');
     setVersionCheckDetail('');
   }, [open]);
@@ -166,6 +169,24 @@ export const InstantPushSettingsModal: React.FC<InstantPushSettingsModalProps> =
 
   const handleOpenCF = () => {
     window.open('https://dash.cloudflare.com/?to=/:account/workers-and-pages/create', '_blank');
+  };
+
+  // Deno loader 是 8 行自动追新片段 (站点 origin 由 buildDenoLoaderSnippet 现场推算),
+  // 贴一次之后 Worker 每次冷启动自动拉站点最新 bundle, 不需要「复制 Worker 代码」式更新。
+  const handleCopyDenoLoader = async () => {
+    try {
+      await copyDenoLoaderToClipboard();
+      setDenoCopyStatus('已复制');
+      setTimeout(() => setDenoCopyStatus(''), 2000);
+    } catch (e) {
+      const err = e as { message?: string } | null;
+      setDenoCopyStatus('');
+      addToast(`复制失败：${err?.message ?? '未知错误'}`, 'error');
+    }
+  };
+
+  const handleOpenDeno = () => {
+    window.open('https://app.deno.com', '_blank');
   };
 
   const handleProbeCapabilities = async () => {
@@ -445,8 +466,36 @@ export const InstantPushSettingsModal: React.FC<InstantPushSettingsModalProps> =
         {/* ② 部署 Worker */}
         <div className="bg-slate-50 rounded-2xl p-4 space-y-2">
           <p className="text-xs font-semibold text-slate-500 uppercase tracking-wider">② 部署 Worker</p>
+
+          {/* 方式 A · Deno (推荐): loader 冷启动自动拉最新 bundle, 部署一次永久追新 */}
+          <div className="rounded-xl bg-white border border-indigo-200 p-3 space-y-2">
+            <p className="text-[12px] text-slate-600 font-bold">方式 A · Deno Deploy（推荐，自动追新）</p>
+            <p className="text-[11px] text-slate-500 leading-relaxed">
+              在 Deno 控制台新建 <strong>Playground</strong>，把复制到的 loader（仅 8 行）粘贴进去部署；
+              VAPID 公钥/私钥到「推送凭据 (VAPID)」面板复制 env 清单，填进 Playground 的环境变量。
+              之后 Worker 每次冷启动会自动拉取站点最新代码，<strong>无需手动更新</strong>。
+            </p>
+            <div className="grid grid-cols-2 gap-2">
+              <button
+                type="button"
+                onClick={() => void handleCopyDenoLoader()}
+                className="py-2 rounded-xl text-[11px] font-bold bg-indigo-500 text-white hover:bg-indigo-600"
+              >
+                {denoCopyStatus || '复制 Deno Loader'}
+              </button>
+              <button
+                type="button"
+                onClick={handleOpenDeno}
+                className="py-2 rounded-xl text-[11px] font-bold bg-white border border-slate-200 text-slate-600 hover:bg-slate-50"
+              >
+                ↗ Deno 控制台
+              </button>
+            </div>
+          </div>
+
           <p className="text-[11px] text-slate-500 leading-relaxed">
-            在 CF 后台 Create → Worker 建一个空 Worker，进 <strong>Edit code</strong> 把下面复制到的
+            <strong>方式 B · Cloudflare（手动更新）：</strong>在 CF 后台 Create → Worker 建一个空 Worker，进
+            <strong> Edit code</strong> 把下面复制到的
             <code className="font-mono"> worker.bundle.js </code>全部内容粘贴覆盖，再 Deploy；
             VAPID 公钥/私钥到「推送凭据 (VAPID)」面板复制 env 清单，粘进 Worker 的 Variables。
           </p>
@@ -477,7 +526,8 @@ export const InstantPushSettingsModal: React.FC<InstantPushSettingsModalProps> =
           )}
           {versionCheck === 'stale' && (
             <p className="text-[11px] leading-relaxed text-amber-600">
-              你部署的 Worker 不是最新版 —— 按下面复制最新代码到 CF Worker 重新 Deploy 即可
+              你部署的 Worker 不是最新版 —— Deno：进 Playground 重新部署一次（保存即可）；
+              CF：复制下面的最新代码重新粘贴 Deploy
               {versionCheckDetail ? ` (${versionCheckDetail})` : ''}
             </p>
           )}

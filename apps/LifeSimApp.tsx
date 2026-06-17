@@ -1207,7 +1207,7 @@ const LifeSimApp: React.FC = () => {
             {/* ── Bottom action bar (retro buttons) ── */}
             {isUserTurn && (
                 <div className="flex-shrink-0 flex gap-2 px-2 pb-2 pt-1"
-                    style={{ paddingBottom: 'max(8px, env(safe-area-inset-bottom, 8px))' }}>
+                    style={{ paddingBottom: 'max(8px, var(--safe-bottom, 0px))' }}>
                     <button onClick={() => setActionPanel('stir')}
                         className="flex-1 retro-btn retro-btn-primary flex items-center justify-center gap-1"
                         style={{ padding: '7px 8px' }}>

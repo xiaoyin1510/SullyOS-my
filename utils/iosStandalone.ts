@@ -152,4 +152,16 @@ export const installIOSStandaloneWorkaround = () => {
         document.addEventListener('focusout', handleFocusOut);
     }
     setViewportVars();
+
+    // iOS standalone 冷启动时 env() / JS probe 偶发都给 0；resize / orientationchange 整场可能都不触发，
+    // 缓存就会被锁在 0，底部控件整场贴 home 条。这里在启动后阶梯式重探几次，遇到任一边还没锁定就再试。
+    if (useStandaloneFixes) {
+        const RETRY_DELAYS_MS = [120, 500, 1500, 3000];
+        for (const delay of RETRY_DELAYS_MS) {
+            window.setTimeout(() => {
+                if (cachedTopInset !== null && cachedBottomInset !== null) return; // 两边都已锁定，无需再试
+                setViewportVars();
+            }, delay);
+        }
+    }
 };

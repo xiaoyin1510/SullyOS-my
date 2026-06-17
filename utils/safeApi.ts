@@ -167,6 +167,7 @@ export async function safeFetchJson(
             }
             attemptOptions = { ...metaOptions, signal: ac.signal };
         }
+        const attemptStartedAt = Date.now();
         try {
             const response = await fetch(url, attemptOptions);
             if (timeoutHandle) clearTimeout(timeoutHandle);
@@ -195,6 +196,7 @@ export async function safeFetchJson(
                     status: response.status,
                     requestBody: options.body,
                     response: data,
+                    durationMs: Date.now() - attemptStartedAt,
                 });
             }
             return data;
@@ -228,6 +230,7 @@ export async function safeFetchJson(
                     status: lastStatus,
                     requestBody: options.body,
                     error: e,
+                    durationMs: Date.now() - attemptStartedAt,
                 });
             }
             throw e;

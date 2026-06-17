@@ -9,6 +9,7 @@ import { ContextBuilder } from '../utils/context';
 import { injectMemoryPalace } from '../utils/memoryPalace/pipeline';
 import { processGroupNewMessages, deleteGroupMemoriesByGroupId } from '../utils/memoryPalace/groupPipeline';
 import { processImage } from '../utils/file';
+import { stickerNameFromUrl } from '../utils/messageFormat';
 import { DEFAULT_ARCHIVE_PROMPTS } from '../components/chat/ChatConstants';
 import { UsersThree } from '@phosphor-icons/react';
 
@@ -763,7 +764,7 @@ ${recentPrivate || '(暂无私聊)'}
                         content = '[图片]';
                     }
                 } else if (m.type === 'emoji') {
-                    content = '[表情包]';
+                    content = `[表情包: ${stickerNameFromUrl(emojis, rawText.trim())}]`;
                 } else if (m.type === 'transfer') {
                     content = `[发红包: ${m.metadata?.amount}]`;
                 } else if (/^(data:|https?:\/\/)/i.test(rawText.trim())) {
@@ -924,7 +925,9 @@ ${attachedImagesNote}
                 jsonStr = jsonStr.substring(firstBracket, lastBracket + 1);
             }
 
-            let actions = [];
+            // director 解析出的行动数组（形状由 LLM 输出决定，逐字段读取时再各自判型）。
+            // 显式标 any[]：不假装它有精确类型，同时避免 evolving-any 在严格检查下漏报。
+            let actions: any[] = [];
             try {
                 actions = JSON.parse(jsonStr);
                 if (!Array.isArray(actions)) actions = [];
@@ -1092,9 +1095,11 @@ ${attachedImagesNote}
     if (view === 'list') {
         return (
             <div className="h-full w-full bg-slate-50 flex flex-col font-light">
-                <div className="bg-white/70 backdrop-blur-md flex items-end pb-3 px-4 border-b border-white/40 shrink-0 z-10 sticky top-0"
-                    style={{ height: 'calc(5rem + var(--safe-top))' }}>
-                    <button onClick={closeApp} className="p-2 -ml-2 rounded-full hover:bg-black/5 active:scale-90 transition-transform">
+                {/* safe-top spacer 透明 + backdrop-blur，下方容器/list bubbles 透出+模糊（跟 iOS 系统 status bar 一致），避免 header 白 bg 在刘海下铺一条突兀白带 */}
+                <div className="shrink-0 z-10 sticky top-0">
+                    <div className="bg-transparent backdrop-blur-xl" style={{ height: 'var(--safe-top)' }} />
+                    <div className="bg-white/70 backdrop-blur-md flex items-end pb-3 px-4 border-b border-white/40 h-20">
+                        <button onClick={closeApp} className="p-2 -ml-2 rounded-full hover:bg-black/5 active:scale-90 transition-transform">
                         <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" strokeWidth={1.5} stroke="currentColor" className="w-6 h-6 text-slate-600"><path strokeLinecap="round" strokeLinejoin="round" d="M15.75 19.5 8.25 12l7.5-7.5" /></svg>
                     </button>
                     <span className="font-medium text-slate-700 text-lg tracking-wide pl-2">群聊列表</span>
@@ -1102,8 +1107,9 @@ ${attachedImagesNote}
                     <button onClick={() => { setModalType('create'); setSelectedMembers(new Set()); setTempGroupName(''); }} className="p-2 -mr-2 text-violet-500 bg-violet-50 hover:bg-violet-100 rounded-full transition-colors">
                         <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" strokeWidth={2} stroke="currentColor" className="w-6 h-6"><path strokeLinecap="round" strokeLinejoin="round" d="M12 4.5v15m7.5-7.5h-15" /></svg>
                     </button>
+                    </div>
                 </div>
-                
+
                 <div className="p-4 space-y-3 overflow-y-auto">
                     {groups.map(g => (
                         <div key={g.id} onClick={() => { setActiveGroup(g); setView('chat'); }} className="bg-white p-4 rounded-2xl shadow-sm border border-slate-100 flex items-center gap-4 active:scale-[0.98] transition-all cursor-pointer group hover:bg-violet-50/30">
@@ -1192,9 +1198,10 @@ ${attachedImagesNote}
                 </div>
             )}
 
-            {/* Header */}
-            <div className="bg-white/80 backdrop-blur-xl px-5 flex items-end pb-4 border-b border-slate-200/60 shrink-0 z-30 sticky top-0 shadow-sm transition-all"
-                style={{ height: 'calc(6rem + var(--safe-top))' }}>
+            {/* Header — safe-top spacer 透明 + backdrop-blur 自适应容器色，跟 iOS status bar 一致 */}
+            <div className="shrink-0 z-30 sticky top-0 transition-all">
+            <div className="bg-transparent backdrop-blur-xl" style={{ height: 'var(--safe-top)' }} />
+            <div className="bg-white/80 backdrop-blur-xl px-5 flex items-end pb-4 border-b border-slate-200/60 shadow-sm h-24">
                 {selectionMode ? (
                     <div className="flex items-center justify-between w-full">
                         <button onClick={() => { setSelectionMode(false); setSelectedMsgIds(new Set()); }} className="text-sm font-bold text-slate-500 px-2 py-1">取消</button>
@@ -1245,6 +1252,7 @@ ${attachedImagesNote}
                         </button>
                     </div>
                 )}
+            </div>
             </div>
 
             {/* Messages Area */}

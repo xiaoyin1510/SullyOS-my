@@ -152,6 +152,28 @@ describe('decodeBytes', () => {
         expect(r.encoding === 'gb18030' || r.encoding === 'utf-8?').toBe(true);
         if (r.encoding === 'gb18030') expect(r.text).toBe('你好');
     });
+
+    it('picks shift_jis for Japanese kana (not gb18030 mojibake)', () => {
+        // こんにちは in Shift_JIS
+        const bytes = new Uint8Array([0x82, 0xB1, 0x82, 0xF1, 0x82, 0xC9, 0x82, 0xBF, 0x82, 0xCD]);
+        const r = decodeBytes(bytes.buffer);
+        expect(r.encoding).not.toBe('gb18030'); // 关键：别再当成中文乱码
+        if (r.encoding === 'shift_jis') expect(r.text).toBe('こんにちは');
+    });
+
+    it('decodes EUC-JP Japanese kana correctly (no mojibake)', () => {
+        // こんにちは in EUC-JP（这串假名字节在 gb18030 里恰好同样映射，关键是结果别是乱码）
+        const bytes = new Uint8Array([0xA4, 0xB3, 0xA4, 0xF3, 0xA4, 0xCB, 0xA4, 0xC1, 0xA4, 0xCF]);
+        const r = decodeBytes(bytes.buffer);
+        expect(r.text).toBe('こんにちは');
+    });
+
+    it('honors a forced encoding override', () => {
+        const bytes = new Uint8Array([0x82, 0xB1, 0x82, 0xF1]); // こん in Shift_JIS
+        const r = decodeBytes(bytes.buffer, 'shift_jis');
+        expect(r.encoding).toBe('shift_jis');
+        expect(r.text).toBe('こん');
+    });
 });
 
 describe('chunkNovelText', () => {
@@ -253,5 +275,26 @@ describe('parseVROutput', () => {
         const raw = Array.from({ length: 5 }, (_, i) => `<批注 段落="${i * 3}">第${i}条</批注>`).join('') + '<动态>x</动态>';
         const out = parseVROutput(raw);
         expect(out.annotations).toHaveLength(5);
+    });
+
+    it('strips leaked 回应/段落 attribute residue from content', () => {
+        // 模型把 #cgis 回应="#cgis" 复读进了正文开头（用户实测里的真实泄漏）
+        const raw = '<批注 段落="5" 回应="#cgis">#cgis 回应="#cgis" 莲干并蒂？这姿势虽缠人</批注><动态>读完</动态>';
+        const out = parseVROutput(raw);
+        expect(out.annotations).toHaveLength(1);
+        expect(out.annotations[0].refLabel).toBe('cgis');
+        expect(out.annotations[0].content).toBe('莲干并蒂？这姿势虽缠人');
+        expect(out.annotations[0].content).not.toContain('回应');
+        expect(out.annotations[0].content).not.toContain('#cgis');
+    });
+
+    it('strips a bare leaked #label prefix', () => {
+        const out = parseVROutput('<批注 段落="2">#vo2m 这一处写得真好</批注><动态>x</动态>');
+        expect(out.annotations[0].content).toBe('这一处写得真好');
+    });
+
+    it('does NOT strip legitimate content starting with a quote', () => {
+        const out = parseVROutput('<批注 段落="1">「凤骑龙」这名字太刻意了</批注><动态>x</动态>');
+        expect(out.annotations[0].content).toBe('「凤骑龙」这名字太刻意了');
     });
 });

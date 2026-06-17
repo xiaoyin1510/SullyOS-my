@@ -14,7 +14,7 @@ import { formatMessageWithTime, formatMessageForPrompt } from '../utils/messageF
 import { DEFAULT_ARCHIVE_PROMPTS } from '../components/chat/ChatConstants';
 import ImpressionPanel from '../components/character/ImpressionPanel';
 import MemoryArchivist from '../components/character/MemoryArchivist';
-import { safeResponseJson, extractContent } from '../utils/safeApi';
+import { safeFetchJson, extractContent } from '../utils/safeApi';
 import { fetchMiniMaxVoices, MiniMaxVoiceItem } from '../utils/minimaxVoice';
 import { resolveMiniMaxApiKey } from '../utils/minimaxApiKey';
 import { normalizeUserImpression } from '../utils/impression';
@@ -57,6 +57,7 @@ const CharacterCard: React.FC<{
 const Character: React.FC = () => {
   const { closeApp, openApp, characters, activeCharacterId, setActiveCharacterId, addCharacter, updateCharacter, deleteCharacter, apiConfig, addToast, userProfile, customThemes, addCustomTheme, worldbooks, addWorldbook } = useOS();
   const [view, setView] = useState<'list' | 'detail'>('list');
+  const [charPage, setCharPage] = useState(0); // 角色列表分页（每页 6 个）
   const [detailTab, setDetailTab] = useState<'identity' | 'memory' | 'impression'>('identity');
   const [editingId, setEditingId] = useState<string | null>(null);
   const [formData, setFormData] = useState<CharacterProfile | null>(null);
@@ -350,7 +351,7 @@ const Character: React.FC = () => {
       const refineUrl = `${apiConfig.baseUrl.replace(/\/+$/, '')}/chat/completions`;
       const t0 = performance.now();
       try {
-          const response = await fetch(refineUrl, {
+          const data = await safeFetchJson(refineUrl, {
               method: 'POST',
               headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${apiConfig.apiKey}` },
               body: JSON.stringify({
@@ -361,10 +362,8 @@ const Character: React.FC = () => {
                   ],
                   temperature: 0.3,
               })
-          });
+          }, 0);
           const dt = Math.round(performance.now() - t0);
-          if (!response.ok) throw new Error(`API Request failed (HTTP ${response.status} after ${dt}ms)`);
-          const data = await safeResponseJson(response);
           const summary = extractContent(data);
           if (!summary) {
               // 失败时留一条诊断 warn：Gemini 3.1 preview 在某些 prompt 下会静默拒答
@@ -434,14 +433,12 @@ const Character: React.FC = () => {
           prompt = prompt.replace(/\$\{userProfile\.name\}/g, userProfile.name);
           prompt = prompt.replace(/\$\{rawLog.*?\}/g, rawLog.substring(0, 200000));
 
-          const response = await fetch(`${apiConfig.baseUrl.replace(/\/+$/, '')}/chat/completions`, {
+          const data = await safeFetchJson(`${apiConfig.baseUrl.replace(/\/+$/, '')}/chat/completions`, {
               method: 'POST',
               headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${apiConfig.apiKey}` },
               body: JSON.stringify({ model: apiConfig.model, messages: [{ role: 'user', content: prompt }], temperature: 0.5, max_tokens: 8000, stream: false }),
-          });
-          if (!response.ok) throw new Error(`API ${response.status}`);
-          const data = await safeResponseJson(response);
-          let summary = (data.choices?.[0]?.message?.content || '').trim().replace(/^["']|["']$/g, '');
+          }, 0);
+          let summary = extractContent(data).replace(/^["']|["']$/g, '');
           if (!summary) throw new Error('空响应');
 
           // upsert：同日期的 mood='archive' 替换；'palace' 自动归档不碰
@@ -499,10 +496,8 @@ const Character: React.FC = () => {
       
       try { 
           const prompt = `Task: Convert this text log into a JSON array. Format: [{ "date": "YYYY-MM-DD", "summary": "...", "mood": "..." }] Text: ${importText.substring(0, 8000)}`; 
-          const response = await fetch(`${apiConfig.baseUrl.replace(/\/+$/, '')}/chat/completions`, { method: 'POST', headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${apiConfig.apiKey}` }, body: JSON.stringify({ model: apiConfig.model, messages: [{ role: "user", content: prompt }], temperature: 0.1 }) }); 
-          if (!response.ok) throw new Error(`HTTP Error: ${response.status}`); 
-          const data = await safeResponseJson(response); 
-          let content = data.choices?.[0]?.message?.content || ''; 
+          const data = await safeFetchJson(`${apiConfig.baseUrl.replace(/\/+$/, '')}/chat/completions`, { method: 'POST', headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${apiConfig.apiKey}` }, body: JSON.stringify({ model: apiConfig.model, messages: [{ role: "user", content: prompt }], temperature: 0.1 }) }, 0);
+          let content = extractContent(data);
           content = content.replace(/```json/g, '').replace(/```/g, '').trim(); 
           const firstBracket = content.indexOf('['); 
           const lastBracket = content.lastIndexOf(']'); 
@@ -577,19 +572,23 @@ const Character: React.FC = () => {
                 prompt = prompt.replace(/\$\{userProfile\.name\}/g, userProfile.name);
                 prompt = prompt.replace(/\$\{rawLog.*?\}/g, rawLog.substring(0, 200000));
 
-                const response = await fetch(`${apiConfig.baseUrl.replace(/\/+$/, '')}/chat/completions`, {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${apiConfig.apiKey}` },
-                    body: JSON.stringify({
-                        model: apiConfig.model,
-                        messages: [{ role: "user", content: prompt }],
-                        max_tokens: 8000, 
-                        temperature: 0.5
-                    })
-                });
+                let data: any = null;
+                try {
+                    data = await safeFetchJson(`${apiConfig.baseUrl.replace(/\/+$/, '')}/chat/completions`, {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${apiConfig.apiKey}` },
+                        body: JSON.stringify({
+                            model: apiConfig.model,
+                            messages: [{ role: "user", content: prompt }],
+                            max_tokens: 8000,
+                            temperature: 0.5
+                        })
+                    }, 0);
+                } catch {
+                    // 单天失败软跳过，继续后面的日期（与原 if(response.ok) 的语义一致）
+                }
 
-                if (response.ok) {
-                    const data = await safeResponseJson(response);
+                if (data) {
                     let summary = extractContent(data);
                     summary = summary.replace(/^["']|["']$/g, '').trim();
 
@@ -759,21 +758,23 @@ ${isInitialGeneration ? `
 }
 注意：observed_changes 的每一项必须是纯字符串（string），例如 ["最近变得更开朗了", "开始主动分享日常"]。严禁使用对象格式如 {"period": "...", "description": "..."}。`;
 
-          const response = await fetch(`${apiConfig.baseUrl.replace(/\/+$/, '')}/chat/completions`, {
+          const data = await safeFetchJson(`${apiConfig.baseUrl.replace(/\/+$/, '')}/chat/completions`, {
               method: 'POST',
               headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${apiConfig.apiKey}` },
               body: JSON.stringify({
                   model: apiConfig.model,
                   messages: [{ role: "user", content: prompt }],
-                  max_tokens: 8000, 
-                  temperature: 0.5
+                  max_tokens: 8000,
+                  temperature: 0.5,
+                  // 印象 prompt 体量大（含完整上下文 + 记忆 + 近期聊天），非流式下要等
+                  // 整段思考链 + JSON 全生成完才返回首字节，常超 60s 撞上中转站空闲超时被
+                  // 掐断（NetworkError）。开流式让连接持续有数据，绕开空闲超时；
+                  // safeResponseJson 会把 SSE 流拼回完整对象，下游 extractContent 无需改动。
+                  stream: true
               })
-          });
+          }, 0);
+          let content = extractContent(data);
 
-          if (!response.ok) throw new Error('API Request Failed');
-          const data = await safeResponseJson(response);
-          let content = data.choices[0].message.content;
-          
           content = content.replace(/```json/g, '').replace(/```/g, '').trim();
           const parsed = normalizeUserImpression(JSON.parse(content));
           if (!parsed) throw new Error('印象生成结果不完整');
@@ -974,20 +975,43 @@ ${isInitialGeneration ? `
                    </div>
                </div>
                <div className="flex-1 overflow-y-auto px-5 pb-20 no-scrollbar flex flex-col gap-3">
-                   {characters.map(char => (
-                       <CharacterCard 
-                           key={char.id} 
-                           char={char} 
-                           onClick={() => { setEditingId(char.id); setView('detail'); }} 
-                           onDelete={(e) => { 
-                               e.stopPropagation(); 
-                               setDeleteConfirmTarget(char.id); 
-                           }} 
-                       />
-                   ))}
-                   <button onClick={addCharacter} className="w-full py-4 rounded-3xl border border-dashed border-slate-300 text-slate-400 text-sm hover:bg-white/30 transition-all flex items-center justify-center gap-2 shrink-0">
-                       <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" strokeWidth={1.5} stroke="currentColor" className="w-5 h-5"><path strokeLinecap="round" strokeLinejoin="round" d="M12 4.5v15m7.5-7.5h-15" /></svg>新建链接
-                   </button>
+                   {(() => {
+                       const PAGE_SIZE = 6;
+                       const totalPages = Math.max(1, Math.ceil(characters.length / PAGE_SIZE));
+                       const page = Math.min(charPage, totalPages - 1);
+                       const pageChars = characters.slice(page * PAGE_SIZE, page * PAGE_SIZE + PAGE_SIZE);
+                       return (
+                           <>
+                               {pageChars.map(char => (
+                                   <CharacterCard
+                                       key={char.id}
+                                       char={char}
+                                       onClick={() => { setEditingId(char.id); setView('detail'); }}
+                                       onDelete={(e) => {
+                                           e.stopPropagation();
+                                           setDeleteConfirmTarget(char.id);
+                                       }}
+                                   />
+                               ))}
+                               <button onClick={addCharacter} className="w-full py-4 rounded-3xl border border-dashed border-slate-300 text-slate-400 text-sm hover:bg-white/30 transition-all flex items-center justify-center gap-2 shrink-0">
+                                   <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" strokeWidth={1.5} stroke="currentColor" className="w-5 h-5"><path strokeLinecap="round" strokeLinejoin="round" d="M12 4.5v15m7.5-7.5h-15" /></svg>新建链接
+                               </button>
+                               {totalPages > 1 && (
+                                   <div className="flex items-center justify-center gap-3 pt-2 shrink-0">
+                                       <button onClick={() => setCharPage(Math.max(0, page - 1))} disabled={page === 0}
+                                           className="w-9 h-9 rounded-full bg-white/60 border border-white/50 shadow-sm flex items-center justify-center text-slate-500 disabled:opacity-30 active:scale-90 transition-all">
+                                           <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" strokeWidth={2} stroke="currentColor" className="w-4 h-4"><path strokeLinecap="round" strokeLinejoin="round" d="M15.75 19.5 8.25 12l7.5-7.5" /></svg>
+                                       </button>
+                                       <span className="text-sm text-slate-500 font-medium tabular-nums min-w-[40px] text-center">{page + 1}/{totalPages}</span>
+                                       <button onClick={() => setCharPage(Math.min(totalPages - 1, page + 1))} disabled={page >= totalPages - 1}
+                                           className="w-9 h-9 rounded-full bg-white/60 border border-white/50 shadow-sm flex items-center justify-center text-slate-500 disabled:opacity-30 active:scale-90 transition-all">
+                                           <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" strokeWidth={2} stroke="currentColor" className="w-4 h-4"><path strokeLinecap="round" strokeLinejoin="round" d="m8.25 4.5 7.5 7.5-7.5 7.5" /></svg>
+                                       </button>
+                                   </div>
+                               )}
+                           </>
+                       );
+                   })()}
                </div>
            </div>
        ) : formData && (
@@ -1056,7 +1080,7 @@ ${isInitialGeneration ? `
                            
                            <div>
                                <label className="text-[10px] font-bold text-slate-400 uppercase tracking-widest mb-1.5 block">核心指令 (System Prompt)</label>
-                               <textarea value={formData.systemPrompt} onChange={(e) => handleChange('systemPrompt', e.target.value)} className="w-full h-40 bg-white rounded-3xl p-5 text-sm shadow-sm resize-none focus:ring-1 focus:ring-primary/20 transition-all" placeholder="设定..." />
+                               <textarea value={formData.systemPrompt} onChange={(e) => handleChange('systemPrompt', e.target.value)} className="w-full h-40 bg-white rounded-3xl p-5 text-sm shadow-sm resize-none focus:ring-1 focus:ring-primary/20 transition-all vr-reader-scroll" placeholder="设定..." />
                            </div>
 
                            <div>
@@ -1064,8 +1088,8 @@ ${isInitialGeneration ? `
                                <textarea 
                                     value={formData.worldview || ''} 
                                     onChange={(e) => handleChange('worldview', e.target.value)} 
-                                    className="w-full h-24 bg-white rounded-3xl p-5 text-sm shadow-sm resize-none focus:ring-1 focus:ring-primary/20 transition-all" 
-                                    placeholder="在这个世界里，魔法是存在的..." 
+                                    className="w-full h-24 bg-white rounded-3xl p-5 text-sm shadow-sm resize-none focus:ring-1 focus:ring-primary/20 transition-all vr-reader-scroll"
+                                    placeholder="在这个世界里，魔法是存在的..."
                                 />
                            </div>
 

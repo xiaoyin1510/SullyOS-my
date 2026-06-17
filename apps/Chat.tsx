@@ -1,4 +1,5 @@
 import React, { useState, useEffect, useRef, useLayoutEffect, useMemo, useCallback } from 'react';
+import { createPortal } from 'react-dom';
 import { useOS } from '../context/OSContext';
 import { DB } from '../utils/db';
 import { Message, MessageType, MemoryFragment, Emoji, EmojiCategory, DailySchedule, ScheduleSlot } from '../types';
@@ -9,10 +10,17 @@ import { formatMessageWithTime } from '../utils/messageFormat';
 import { XhsMcpClient, extractNotesFromMcpData, normalizeNote } from '../utils/xhsMcpClient';
 import { isMcdConfigured } from '../utils/mcdMcpClient';
 import { isMcdActivatedInMessages, MCD_ACTIVATE_TRIGGER, MCD_DEACTIVATE_TRIGGER } from '../utils/mcdToolBridge';
+import { isLuckinConfigured } from '../utils/luckinMcpClient';
+import { isLuckinActivatedInMessages, LUCKIN_ACTIVATE_TRIGGER, LUCKIN_DEACTIVATE_TRIGGER } from '../utils/luckinToolBridge';
 import MessageItem from '../components/chat/MessageItem';
 import McdMiniApp from '../components/mcd/McdMiniApp';
+import LuckinMiniApp from '../components/luckin/LuckinMiniApp';
+import LuckinLocationModal from '../components/luckin/LuckinLocationModal';
+import LuckinHelpModal from '../components/luckin/LuckinHelpModal';
 import { PRESET_THEMES, DEFAULT_ARCHIVE_PROMPTS } from '../components/chat/ChatConstants';
 import ChatHeader from '../components/chat/ChatHeaderShell';
+import CharacterEntryTransition from '../components/chat/CharacterEntryTransition';
+import ChromeCssEditor from '../components/chat/ChromeCssEditor';
 import ChatInputArea from '../components/chat/ChatInputArea';
 import ChatModals from '../components/chat/ChatModals';
 import Modal from '../components/os/Modal';
@@ -20,7 +28,8 @@ import ProactiveSettingsModal from '../components/chat/ProactiveSettingsModal';
 import ThinkingChainSettingsModal from '../components/chat/ThinkingChainSettingsModal';
 import NuomiCommerceMiniApp, { CommerceCardPayload, CommerceMessagePayload, CommerceMode } from '../components/commerce/NuomiCommerceMiniApp';
 import { useChatAI } from '../hooks/useChatAI';
-import { synthesizeSpeechDetailed, cleanTextForTts } from '../utils/minimaxTts';
+import { synthesizeSpeechDetailed, cleanTextForTts, parseVoiceOutput } from '../utils/minimaxTts';
+import { resolveMiniMaxApiKey } from '../utils/minimaxApiKey';
 import { isInstantConfigReady, loadInstantConfig } from '../utils/instantPushClient';
 
 const VOICE_LANG_LABELS: Record<string, string> = { en: 'English', ja: '日本語', ko: '한국어', fr: 'Français', es: 'Español' };
@@ -52,6 +61,10 @@ const Chat: React.FC = () => {
     const [visibleCount, setVisibleCount] = useState(30);
     const [windowedFocusMsgId, setWindowedFocusMsgId] = useState<number | null>(null);
     const [flashMsgId, setFlashMsgId] = useState<number | null>(null);
+    // 角色切换/进入时的缓入开关：先 false（透明），下一帧转 true，靠 CSS transition 平滑淡入。
+    // 初值 false 让首次打开也是淡入、且不会有"先显示再变透明"的闪烁。
+    // 角色切换「登场」过场是否显示。切换/进入角色时由 useLayoutEffect 在绘制前置真，覆盖住加载、避免闪到新聊天。
+    const [showEntry, setShowEntry] = useState(false);
     const WINDOW_RADIUS = 25;
     const [input, setInput] = useState('');
     const [showPanel, setShowPanel] = useState<'none' | 'actions' | 'emojis' | 'chars'>('none');
@@ -72,7 +85,7 @@ const Chat: React.FC = () => {
     // Reply Logic
     const [replyTarget, setReplyTarget] = useState<Message | null>(null);
 
-    const [modalType, setModalType] = useState<'none' | 'transfer' | 'emoji-import' | 'chat-settings' | 'message-options' | 'edit-message' | 'delete-emoji' | 'delete-category' | 'add-category' | 'history-manager' | 'archive-settings' | 'prompt-editor' | 'category-options' | 'category-visibility' | 'schedule'>('none');
+    const [modalType, setModalType] = useState<'none' | 'transfer' | 'emoji-import' | 'chat-settings' | 'message-options' | 'edit-message' | 'delete-emoji' | 'delete-category' | 'add-category' | 'history-manager' | 'archive-settings' | 'prompt-editor' | 'category-options' | 'category-visibility' | 'schedule' | 'chrome-css'>('none');
     const [scheduleData, setScheduleData] = useState<DailySchedule | null>(null);
     const [isScheduleGenerating, setIsScheduleGenerating] = useState(false);
     const [allHistoryMessages, setAllHistoryMessages] = useState<Message[]>([]);
@@ -92,14 +105,6 @@ const Chat: React.FC = () => {
     const [showProactiveModal, setShowProactiveModal] = useState(false);
     const [showThinkingChainModal, setShowThinkingChainModal] = useState(false);
     const [commerceAppOpen, setCommerceAppOpen] = useState<CommerceMode | null>(null);
-
-    // 🛟 人格抢救 Modal：角色被"情感型 0.3"默认值卡住时，进聊天强制弹窗重跑一次检测
-    type PersonalityRescueState =
-        | { open: false }
-        | { open: true; charId: string; charName: string; phase: 'rescuing' }
-        | { open: true; charId: string; charName: string; phase: 'done'; result: { style: string; ruminationTendency: number; reasoning: string } }
-        | { open: true; charId: string; charName: string; phase: 'failed'; error: string };
-    const [personalityRescue, setPersonalityRescue] = useState<PersonalityRescueState>({ open: false });
 
     // Archive Prompts State
     const [archivePrompts, setArchivePrompts] = useState<{id: string, name: string, content: string}[]>(DEFAULT_ARCHIVE_PROMPTS);
@@ -164,6 +169,9 @@ const Chat: React.FC = () => {
 
     // 小程序快照 ref: MiniApp 状态变化时塞进来, useChatAI 在 build system prompt 时读取并注入
     const mcdMiniAppRef = useRef<import('../utils/mcdToolBridge').McdMiniAppSnapshot | undefined>(undefined);
+    const luckinMiniAppRef = useRef<import('../utils/luckinToolBridge').LuckinMiniAppSnapshot | undefined>(undefined);
+    // 瑞幸聊天点单模式 (点"瑞一杯"激活: 角色直接调真实工具, 注入定位)
+    const luckinChatRef = useRef<import('../utils/luckinToolBridge').LuckinChatState | undefined>(undefined);
 
     // --- Initialize Hook ---
     const { isTyping, recallStatus, searchStatus, diaryStatus, emotionStatus, memoryPalaceStatus, memoryPalaceResult, setMemoryPalaceResult, lastDigestResult, setLastDigestResult, lastTokenUsage, tokenBreakdown, setLastTokenUsage, triggerAI, startProactiveChat, stopProactiveChat, isProactiveActive } = useChatAI({
@@ -182,6 +190,8 @@ const Chat: React.FC = () => {
             : undefined,
         memoryPalaceConfig,
         mcdMiniAppRef,
+        luckinMiniAppRef,
+        luckinChatRef,
         updateCharacter,
     });
 
@@ -198,6 +208,16 @@ const Chat: React.FC = () => {
     const prevIsTypingRef = useRef(false);
     // Track blob: URLs we created so we can revoke them on character switch / unmount.
     const voiceBlobUrlsRef = useRef<Set<string>>(new Set());
+    // We warn the user at most once (per character) that MiniMax voice isn't configured —
+    // a character can produce many <语音> messages and we don't want to spam toasts.
+    const minimaxWarnedRef = useRef(false);
+
+    /** Whether this character can synthesize real voice (MiniMax key + a voice profile). */
+    const isMinimaxReady = useCallback(() => {
+        const vp = char.voiceProfile;
+        const hasVoiceProfile = !!(vp?.voiceId || (vp?.timberWeights && vp.timberWeights.length > 0));
+        return hasVoiceProfile && !!resolveMiniMaxApiKey(apiConfig);
+    }, [char, apiConfig]);
 
     const persistVoice = async (msgId: number, url: string, blob: Blob | null, originalText: string, spokenText: string | undefined, lang: string | undefined) => {
         try {
@@ -256,20 +276,34 @@ const Chat: React.FC = () => {
         setPlayingMsgId(msgId);
     };
 
-    /** Extract <语音>...</语音> tag content from a message, if present */
-    const extractVoiceTag = (content: string): string | null => {
-        const match = content.match(/<[语語]音>([\s\S]*?)<\/[语語]音>/);
-        return match ? match[1].trim() : null;
-    };
+    // 稳定的播放回调：用 ref 持有最新闭包，引用永不变 —— 避免每条消息每次渲染都新建箭头函数，
+    // 否则 MessageItem 的 React.memo 会被击穿（30 条重组件每次都全量重渲染 = 进入聊天卡顿主因之一）。
+    const handlePlayVoiceRef = useRef(handlePlayVoice);
+    handlePlayVoiceRef.current = handlePlayVoice;
+    const onPlayVoiceStable = useCallback((id: number) => handlePlayVoiceRef.current(id), []);
 
     const handleManualTts = async (msg: Message, autoTriggered = false) => {
         if (voiceDataMap[msg.id] || voiceLoading.has(msg.id)) return;
 
-        // Check if message contains a <语音> tag (AI chose to send voice)
-        const voiceTagContent = extractVoiceTag(msg.content);
+        // Parse the structured voice output: spoken text (sanitized) + per-message emotion.
+        const parsedVoice = parseVoiceOutput(msg.content);
+        const voiceTagContent = parsedVoice.hasVoiceTag ? parsedVoice.speech : '';
+        const voiceEmotion = parsedVoice.emotion;
 
         // Auto-TTS: only generate voice when AI explicitly used <语音> tag
-        if (autoTriggered && !voiceTagContent) return;
+        if (autoTriggered && !parsedVoice.hasVoiceTag) return;
+
+        // MiniMax not configured for this character: don't attempt synthesis (it would
+        // throw and surface an error toast on every message / every tap). Instead remind
+        // the user just once — the <语音> bubble still shows its 转文字 button so the
+        // text stays readable, matching real voice messages.
+        if (!isMinimaxReady()) {
+            if (!autoTriggered && !minimaxWarnedRef.current) {
+                minimaxWarnedRef.current = true;
+                addToast('该角色未配置 MiniMax 语音，无法播放真实语音，可点「转文字」查看内容', 'info');
+            }
+            return;
+        }
 
         setVoiceLoading(prev => new Set(prev).add(msg.id));
         try {
@@ -278,8 +312,9 @@ const Chat: React.FC = () => {
             const voiceLang = char.chatVoiceLang || '';
 
             if (voiceTagContent) {
-                // AI already provided the spoken text (possibly translated) in <语音> tag
-                spokenText = cleanTextForTts(`<语音>${voiceTagContent}</语音>`);
+                // AI already provided the spoken text (possibly translated) in <语音> tag.
+                // parseVoiceOutput already sanitized it (whitelisted sound tags only).
+                spokenText = voiceTagContent;
                 // originalText = text OUTSIDE the voice tag (the display/Chinese text)
                 const textOutsideTag = msg.content.replace(/<[语語]音>[\s\S]*?<\/[语語]音>/g, '').trim();
                 originalText = textOutsideTag ? cleanTextForTts(textOutsideTag) : '';
@@ -344,6 +379,7 @@ const Chat: React.FC = () => {
             const { url: blobUrl, blob } = await synthesizeSpeechDetailed(spokenText, char, apiConfig, {
                 languageBoost: voiceLang || undefined,
                 groupId: apiConfig.minimaxGroupId || undefined,
+                emotion: voiceEmotion,
             });
             if (blobUrl.startsWith('blob:')) voiceBlobUrlsRef.current.add(blobUrl);
             const storedSpokenText = voiceTagContent ? spokenText : (voiceLang ? spokenText : undefined);
@@ -361,6 +397,37 @@ const Chat: React.FC = () => {
             addToast(`语音生成失败: ${err?.message || '未知错误'}`, 'error');
         } finally {
             setVoiceLoading(prev => { const next = new Set(prev); next.delete(msg.id); return next; });
+        }
+    };
+
+    // 长按语音菜单里的「下载」：把已生成的语音音频存到本地。
+    // 优先用持久化的 blob；只有远端 URL（CORS 兜底）时先尝试拉回 blob，拉不到就直接开链接让用户自己存。
+    const handleDownloadVoice = async (msg: Message) => {
+        if (!msg?.id) return;
+        try {
+            const stored = await DB.getAssetRaw(voiceAssetKey(msg.id)) as StoredVoice | null;
+            let blob: Blob | null = stored?.blob instanceof Blob ? stored.blob : null;
+            if (!blob && stored?.remoteUrl) {
+                try { const r = await fetch(stored.remoteUrl); if (r.ok) blob = await r.blob(); } catch { /* CORS：走下面的兜底 */ }
+            }
+            const fname = `${(char?.name || '语音').replace(/[\\/:*?"<>|]/g, '_')}_语音_${msg.id}.mp3`;
+            const a = document.createElement('a');
+            a.download = fname;
+            if (blob) {
+                const u = URL.createObjectURL(blob);
+                a.href = u;
+                document.body.appendChild(a); a.click(); a.remove();
+                setTimeout(() => { try { URL.revokeObjectURL(u); } catch { /* ignore */ } }, 1000);
+            } else if (stored?.remoteUrl) {
+                a.href = stored.remoteUrl; a.target = '_blank'; a.rel = 'noopener';
+                document.body.appendChild(a); a.click(); a.remove();
+            } else {
+                addToast('这条还没有可下载的语音', 'error');
+                return;
+            }
+            addToast('语音已开始下载', 'success');
+        } catch {
+            addToast('语音下载失败', 'error');
         }
     };
 
@@ -445,6 +512,8 @@ const Chat: React.FC = () => {
 
     // Revoke blob URLs when switching characters / unmounting to avoid leaks.
     useEffect(() => {
+        // Reset the "MiniMax not configured" warning so each character gets one reminder.
+        minimaxWarnedRef.current = false;
         const urls = voiceBlobUrlsRef.current;
         return () => {
             urls.forEach(u => { try { URL.revokeObjectURL(u); } catch { /* ignore */ } });
@@ -459,37 +528,36 @@ const Chat: React.FC = () => {
         if (!activeCharacterId) return;
 
         const charIdAtStart = activeCharacterId;
-        try {
-            const allMsgs = await DB.getMessagesByCharId(activeCharacterId, true);
-
-            // Guard against stale async results: if the user switched characters
-            // while the DB query was in flight, discard this result.
-            if (activeCharIdRef.current !== charIdAtStart) return;
-
-            // Use ref to always get the CURRENT char (avoids stale closure)
+        // 只用倒序游标取「最近 N 条」（含少量缓冲，抵消 date/call/系统消息被过滤后条数变少），
+        // 不再 getAll 全量反序列化 —— 图片多/消息多的账号原本要把整段历史（含内联图片）一次性读进
+        // 内存才显示 30 条，首次打开会卡好几秒。totalCount 走 index.count，不反序列化、极廉价。
+        const fetchLimit = requestedVisibleCount >= 100000 ? requestedVisibleCount : requestedVisibleCount + 16;
+        const applyResult = (recent: Message[], totalCount: number) => {
+            // 用 ref 取当前 char（避免闭包过期）
             const currentChar = charRef.current;
             // 不在视觉层过滤 hideBeforeMessageId —— 用户能往上滚回看，
             // 上下文截断仅作用于发给 LLM 的 prompt（在 chatPrompts.ts 里处理）。
-            const chatScopeMsgs = allMsgs
+            const chatScopeMsgs = recent
                 .filter(m => m.metadata?.source !== 'date' && m.metadata?.source !== 'call')
                 .filter(m => !(currentChar?.hideSystemLogs && m.role === 'system' && m.type !== 'score_card'));
-
-            setTotalMsgCount(chatScopeMsgs.length);
+            setTotalMsgCount(totalCount);
             setMessages(chatScopeMsgs.slice(-requestedVisibleCount));
+        };
+        try {
+            const { messages: recent, totalCount } = await DB.getRecentMessagesWithCount(activeCharacterId, fetchLimit);
+            // Guard against stale async results: if the user switched characters
+            // while the DB query was in flight, discard this result.
+            if (activeCharIdRef.current !== charIdAtStart) return;
+            applyResult(recent, totalCount);
         } catch (e) {
             // DB read failed — retry once after a short delay
             if (activeCharIdRef.current !== charIdAtStart) return;
             await new Promise(r => setTimeout(r, 200));
             if (activeCharIdRef.current !== charIdAtStart) return;
             try {
-                const retryMsgs = await DB.getMessagesByCharId(activeCharacterId, true);
+                const { messages: recent, totalCount } = await DB.getRecentMessagesWithCount(activeCharacterId, fetchLimit);
                 if (activeCharIdRef.current !== charIdAtStart) return;
-                const currentChar = charRef.current;
-                const chatScopeMsgs = retryMsgs
-                    .filter(m => m.metadata?.source !== 'date' && m.metadata?.source !== 'call')
-                    .filter(m => !(currentChar?.hideSystemLogs && m.role === 'system' && m.type !== 'score_card'));
-                setTotalMsgCount(chatScopeMsgs.length);
-                setMessages(chatScopeMsgs.slice(-requestedVisibleCount));
+                applyResult(recent, totalCount);
             } catch { /* give up silently */ }
         }
     }, [activeCharacterId]);
@@ -554,6 +622,12 @@ const Chat: React.FC = () => {
             }
         }
     }, [activeCharacterId, reloadMessages]);
+
+    // 进入/切换角色时触发「登场」过场。useLayoutEffect 在浏览器绘制前置真，
+    // 让过场层先盖住，避免一帧闪到新角色的空聊天界面。
+    useLayoutEffect(() => {
+        if (activeCharacterId) setShowEntry(true);
+    }, [activeCharacterId]);
 
     useEffect(() => {
         let clearTimer: ReturnType<typeof setTimeout> | null = null;
@@ -656,79 +730,6 @@ const Chat: React.FC = () => {
     // handler, 导致 instant 模式下用户不在该角色页时 buff 回不到前端 (只落 DB), 故移除, 同时
     // 避免和 OSContext 双写.
 
-    // 🛟 人格抢救：进聊天后发现角色被卡在"情感型 0.3"显示（真实存储可能是 emotional/0.3，
-    // 也可能是 undefined —— UI 的 `|| 'emotional'` 和 `?? 0.3` fallback 让两者看起来一样）。
-    // 触发后强制弹窗重跑一次检测，每个角色只抢救一次（rescuedKey）。
-    useEffect(() => {
-        if (!char) return;
-        const style = (char as any).personalityStyle;
-        const rumination = (char as any).ruminationTendency;
-        // v2：旧 silent rescue（4fec4d0）已经把 v1 设到一堆虽然仍是 emotional/0.3 的角色上了。
-        // 换 key 让所有用户都获得一次新的抢救机会，不再被历史标记卡死。
-        const rescuedKey = `mp_personality_rescued_v2_${char.id}`;
-        const alreadyRescued = !!localStorage.getItem(rescuedKey);
-
-        // 副 API 没配时 fallback 到主 apiConfig —— 跟 useChatAI.ts 里 mpLLM 的 fallback 策略对齐，
-        // 否则没配过记忆宫殿 lightLLM 的用户会整个抢救流程静默 pass，体感上就是"什么都没触发"。
-        const mpLLMConfigured = memoryPalaceConfig?.lightLLM;
-        const llmForRescue = (mpLLMConfigured?.baseUrl && mpLLMConfigured?.apiKey)
-            ? mpLLMConfigured
-            : (apiConfig?.baseUrl && apiConfig?.apiKey
-                ? { baseUrl: apiConfig.baseUrl, apiKey: apiConfig.apiKey, model: apiConfig.model }
-                : null);
-        const llmSource = (mpLLMConfigured?.baseUrl && mpLLMConfigured?.apiKey) ? 'lightLLM' : (llmForRescue ? 'apiConfig-fallback' : 'none');
-
-        // "UI 显示 情感型 0.3"的所有情况：
-        // - 完整命中 emotional + 0.3
-        // - 完全 undefined/null（从未检测过或失败后没写回）
-        // - 半命中（一项真实一项 fallback）—— 也按可疑处理
-        const styleSuspect = style === 'emotional' || style == null;
-        const rumSuspect = rumination === 0.3 || rumination == null;
-        const isSuspectDefault = styleSuspect && rumSuspect;
-
-        console.log(`🛟 [PersonalityRescue] 检查 ${char.name}: personalityStyle=${JSON.stringify(style)} ruminationTendency=${JSON.stringify(rumination)} suspectDefault=${isSuspectDefault} alreadyRescued=${alreadyRescued} llmSource=${llmSource}`);
-
-        if (!isSuspectDefault) return;
-        if (alreadyRescued) return;
-        if (!llmForRescue) {
-            console.warn(`🛟 [PersonalityRescue] ${char.name} 命中可疑默认值，但既没配副 API 也没配主 API，跳过抢救`);
-            return;
-        }
-
-        // 已经在抢救同一个角色就不重复触发
-        if (personalityRescue.open && personalityRescue.charId === char.id) return;
-
-        let cancelled = false;
-        const rescueCharId = char.id;
-        const rescueCharName = char.name;
-        const persona = [char.systemPrompt || '', char.worldview || ''].filter(Boolean).join('\n');
-
-        setPersonalityRescue({ open: true, charId: rescueCharId, charName: rescueCharName, phase: 'rescuing' });
-        console.log(`🛟 [PersonalityRescue] ${rescueCharName} 命中可疑默认值（情感型 0.3 或 undefined），使用 ${llmSource} 弹窗抢救中...`);
-
-        (async () => {
-            try {
-                const { detectPersonalityStyle } = await import('../utils/memoryPalace/digestion');
-                const result = await detectPersonalityStyle(rescueCharId, rescueCharName, persona, llmForRescue);
-                if (cancelled) return;
-                try { localStorage.setItem(rescuedKey, '1'); } catch {}
-                updateCharacter(rescueCharId, {
-                    personalityStyle: result.style,
-                    ruminationTendency: result.ruminationTendency,
-                } as any);
-                setPersonalityRescue({ open: true, charId: rescueCharId, charName: rescueCharName, phase: 'done', result });
-            } catch (e: any) {
-                if (cancelled) return;
-                // 抢救失败不设 rescuedKey —— 下次打开聊天再试一次
-                console.warn(`🛟 [PersonalityRescue] ${rescueCharName} 抢救失败:`, e?.message || e);
-                setPersonalityRescue({ open: true, charId: rescueCharId, charName: rescueCharName, phase: 'failed', error: e?.message || String(e) });
-            }
-        })();
-
-        return () => { cancelled = true; };
-        // eslint-disable-next-line react-hooks/exhaustive-deps
-    }, [char?.id, (char as any)?.personalityStyle, (char as any)?.ruminationTendency, memoryPalaceConfig?.lightLLM?.baseUrl, memoryPalaceConfig?.lightLLM?.apiKey, apiConfig?.baseUrl, apiConfig?.apiKey]);
-
     const handleInputChange = (val: string) => {
         setInput(val);
         if (val.trim()) localStorage.setItem(draftKey, val);
@@ -786,6 +787,18 @@ const Chat: React.FC = () => {
             }
             setMcdAppOpen(true);
             setShowPanel('none');
+            return;
+        }
+
+        // 用户手打"瑞一杯" → 激活角色瑞幸点单模式 (注入提示词+工具+定位, 角色自己点)
+        if (!customContent && type === 'text' && text === LUCKIN_ACTIVATE_TRIGGER) {
+            setInput(''); localStorage.removeItem(draftKey);
+            activateLuckin();
+            return;
+        }
+        if (!customContent && type === 'text' && text === LUCKIN_DEACTIVATE_TRIGGER) {
+            setInput(''); localStorage.removeItem(draftKey);
+            deactivateLuckin();
             return;
         }
 
@@ -855,6 +868,9 @@ const Chat: React.FC = () => {
         // 否则保留手动 ⚡（避免"启用 instant = 自动回复"的反直觉强绑定）。
         const instantCfg = loadInstantConfig();
         if (type === 'text' && isInstantConfigReady(instantCfg) && instantCfg.autoTriggerOnSend) {
+            // 上一轮还在跑时直接跳过：triggerAI 内部会因 isTyping=true 静默 reject，
+            // 提前 guard 避免点亮"准备中"指示灯后没人来清，UI 灯被卡住。
+            if (isTyping) return;
             // 标记"准备中"三个点：拼接+发送期间显示，SSE POST 入队 (onInstantPosted) 后清除。
             setInstantSendingActive(true);
             triggerAI(messages, undefined, () => setInstantSendingActive(false));
@@ -865,6 +881,8 @@ const Chat: React.FC = () => {
     // 三个点（从写入 DB 到 SSE POST 入队之间），由 onInstantPosted 清除 ——
     // 与 autoTriggerOnSend 自动路径的指示器行为一致。本地模式无此指示器，直接 triggerAI。
     const handleManualTrigger = () => {
+        // 同上：上一轮还在跑时 triggerAI 会静默 reject，提前挡掉避免指示灯卡死。
+        if (isTyping) return;
         if (!isInstantConfigReady()) { triggerAI(messages); return; }
         // instantSendingActive 驱动 header "发送中…" 徽章 (拼接+发送窗口). 消息上的三个小圆点
         // 另走纯前端判定 (isTyping && 最后一条消息), 见渲染处.
@@ -912,6 +930,7 @@ const Chat: React.FC = () => {
             case 'poke': handleSendText('[戳一戳]', 'interaction'); break;
             case 'archive': setModalType('archive-settings'); break;
             case 'settings': setModalType('chat-settings'); break;
+            case 'chrome-css': setModalType('chrome-css'); break;
             case 'emoji-import': setModalType('emoji-import'); break;
             case 'send-emoji': if (payload) handleSendText(payload.url, 'emoji'); break;
             case 'delete-emoji-req': setSelectedEmoji(payload); setModalType('delete-emoji'); break;
@@ -938,6 +957,15 @@ const Chat: React.FC = () => {
                 break;
             case 'mcd-end':
                 handleSendText(MCD_DEACTIVATE_TRIGGER, 'text', { mcdDeactivate: true });
+                break;
+            case 'luckin-not-configured':
+                addToast('请先到设置 → 瑞幸 启用并填入 MCP Token', 'info');
+                break;
+            case 'luckin-request':
+                activateLuckin();
+                break;
+            case 'luckin-end':
+                deactivateLuckin();
                 break;
             case 'html-mode-toggle': {
                 if (!char) break;
@@ -969,6 +997,40 @@ const Chat: React.FC = () => {
     const [mcdAppOpen, setMcdAppOpen] = useState(false);
     // mcdMiniAppRef 声明在文件靠前 (传给 useChatAI), 这里仅占位
     const mcdConfiguredFlag = useMemo(() => isMcdConfigured(), [showPanel, mcdActivated]);
+
+    // 瑞幸聊天点单模式: 激活态用 React state (临时会话态, 不落库)
+    const [luckinMode, setLuckinMode] = useState(false);
+    const [showLuckinLoc, setShowLuckinLoc] = useState(false); // 瑞一杯定位选择弹窗
+    const [showLuckinHelp, setShowLuckinHelp] = useState(false); // 瑞一杯使用说明
+    const luckinActivated = luckinMode;
+    const [luckinAppOpen, setLuckinAppOpen] = useState(false); // 旧小程序壳, 现已不主动开
+    const luckinConfiguredFlag = useMemo(() => isLuckinConfigured(), [showPanel, luckinActivated]);
+
+    const activateLuckin = useCallback(() => {
+        if (!isLuckinConfigured()) { addToast('请先到设置 → 瑞幸 启用并填入 MCP Token', 'info'); return; }
+        setShowPanel('none');
+        setShowLuckinLoc(true); // 先选定位 (GPS 常抓到机房位置, 让用户选城市)
+    }, [addToast]);
+
+    // 选完定位 → 正式激活角色瑞幸模式, 把坐标注入给角色
+    const onLuckinLocationPick = useCallback((lng: number, lat: number, cityName?: string) => {
+        luckinChatRef.current = { active: true, longitude: lng, latitude: lat, cityName };
+        setLuckinMode(true);
+        setShowLuckinLoc(false);
+        addToast(`瑞一杯已开启 ☕ 定位: ${cityName || '已设置'}`, 'info');
+        // 首次启动: 自动弹一次使用说明 (之后收在 banner 的 ? 里)
+        try {
+            if (localStorage.getItem('aetheros.luckin.helpSeen') !== '1') {
+                setShowLuckinHelp(true);
+                localStorage.setItem('aetheros.luckin.helpSeen', '1');
+            }
+        } catch { /* ignore */ }
+    }, [addToast]);
+
+    const deactivateLuckin = useCallback(() => {
+        luckinChatRef.current = { active: false };
+        setLuckinMode(false);
+    }, []);
 
     // 用户在菜单卡里点"发送给角色"时, 把购物车作为 user 消息插入
     const handleMcdSendCart = useCallback(async (items: import('../components/chat/McdCard').McdCartItem[]) => {
@@ -1061,6 +1123,93 @@ const Chat: React.FC = () => {
                 mcdCardKind: 'cart',
                 mcdCartItems: items,
                 mcdOrderContext: ctx,
+            },
+        } as any);
+        await reloadMessages(visibleCountRef.current);
+    }, [char, reloadMessages]);
+
+    // ─── 瑞幸 handlers (与麦当劳同构) ───
+    const handleLuckinSendCart = useCallback(async (items: import('../components/chat/LuckinCard').LuckinCartItem[]) => {
+        if (!char || !items.length) return;
+        const summary = items.map(i => `${i.name}×${i.qty}`).join('、');
+        const total = items.reduce((s, c) => {
+            const p = typeof c.price === 'string' ? parseFloat(c.price) : (typeof c.price === 'number' ? c.price : 0);
+            return s + (isFinite(p) ? p * c.qty : 0);
+        }, 0);
+        const totalStr = total > 0 ? ` 共¥${total.toFixed(2)}` : '';
+        const content = `想要下单：${summary}${totalStr}`;
+        await DB.saveMessage({
+            charId: char.id,
+            role: 'user',
+            type: 'luckin_card',
+            content,
+            metadata: { luckinCardKind: 'cart', luckinCartItems: items },
+        } as any);
+        await reloadMessages(visibleCountRef.current);
+    }, [char, reloadMessages]);
+
+    const handleLuckinCandidate = useCallback(async (item: import('../components/chat/LuckinCard').LuckinCartItem) => {
+        if (!char || !item) return;
+        const priceStr = (typeof item.price === 'number' || (typeof item.price === 'string' && item.price)) ? ` ¥${item.price}` : '';
+        const content = `「${item.name}」${priceStr}—— 这个怎么样？`;
+        await DB.saveMessage({
+            charId: char.id,
+            role: 'user',
+            type: 'luckin_card',
+            content,
+            metadata: { luckinCardKind: 'candidate', luckinCandidate: item },
+        } as any);
+        await reloadMessages(visibleCountRef.current);
+    }, [char, reloadMessages]);
+
+    const handleLuckinMiniAppSend = useCallback(async (text: string) => {
+        if (!char || !text.trim() || isTyping) return;
+        const trimmed = text.trim();
+        await DB.saveMessage({
+            charId: char.id,
+            role: 'user',
+            type: 'text',
+            content: trimmed,
+            metadata: { fromLuckinMiniApp: true },
+        } as any);
+        const recent = await DB.getRecentMessagesByCharId(char.id, 200);
+        setMessages(recent);
+        triggerAI(recent);
+        // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, [char, isTyping, triggerAI]);
+
+    const handleLuckinMiniAppStateChange = useCallback((state: import('../utils/luckinToolBridge').LuckinMiniAppSnapshot) => {
+        luckinMiniAppRef.current = state;
+    }, []);
+
+    const handleLuckinAppConfirm = useCallback(async (
+        cart: import('../components/luckin/LuckinMiniApp').CartLine[],
+        ctx: import('../components/luckin/LuckinMiniApp').OrderContext,
+    ) => {
+        if (!char || !cart.length) return;
+        const items: import('../components/chat/LuckinCard').LuckinCartItem[] = cart.map(l => ({
+            code: l.code,
+            name: l.name,
+            price: l.price,
+            qty: l.qty,
+            spec: l.spec,
+        }));
+        const summary = items.map(i => `${i.name}×${i.qty}`).join('、');
+        const total = items.reduce((s, c) => {
+            const p = typeof c.price === 'string' ? parseFloat(c.price) : (typeof c.price === 'number' ? c.price : 0);
+            return s + (isFinite(p) ? p * c.qty : 0);
+        }, 0);
+        const totalStr = total > 0 ? ` 共¥${total.toFixed(2)}` : '';
+        const content = `到店自提 (${ctx.storeName || ctx.deptId}) · ${summary}${totalStr}`;
+        await DB.saveMessage({
+            charId: char.id,
+            role: 'user',
+            type: 'luckin_card',
+            content,
+            metadata: {
+                luckinCardKind: 'cart',
+                luckinCartItems: items,
+                luckinOrderContext: ctx,
             },
         } as any);
         await reloadMessages(visibleCountRef.current);
@@ -1956,6 +2105,13 @@ const Chat: React.FC = () => {
 
     const collapsedCount = Math.max(0, totalMsgCount - displayMessages.length);
 
+    // 稳定的思维链配置对象：只在角色/样式变化时重建，避免每次渲染新建对象击穿 MessageItem.memo。
+    const thinkingChainOptions = useMemo(() => ({
+        styleId: (char as any)?.thinkingChainStyle || 'echo',
+        customColors: (char as any)?.thinkingChainCustomColors,
+        onOpenSettings: () => setShowThinkingChainModal(true),
+    }), [(char as any)?.thinkingChainStyle, (char as any)?.thinkingChainCustomColors]);
+
     // Reset active category if it becomes invisible for the current character
     useEffect(() => {
         if (activeCategory !== 'default' && visibleCategories.length > 0 && !visibleCategories.some(c => c.id === activeCategory)) {
@@ -1980,6 +2136,23 @@ const Chat: React.FC = () => {
     // Memoize ChatInputArea callbacks
     const handleSendCallback = useCallback(() => handleSendText(), [char, input, replyTarget]);
     const handleCharSelectCallback = useCallback((id: string) => { setActiveCharacterId(id); setShowPanel('none'); }, []);
+    // 兜底：正常情况下 OSContext 启动时一定会保底一个角色，char 不该为空。
+    // 但若 init 期间某个 store 读取失败（数据其实还在 IndexedDB 里），characters 可能暂时为空，
+    // 此时下面 char.chatBackground 会直接抛 "undefined is not an object" 把整个 App 崩到错误页。
+    // 这里给个温和空态，避免硬崩，也好让用户能退回桌面/重启恢复。
+    if (!char) {
+        return (
+            <div className="flex flex-col items-center justify-center h-full bg-[#f1f5f9] text-center px-8 gap-3">
+                <div className="text-4xl">💤</div>
+                <div className="text-slate-600 text-sm font-medium">暂时没有可用的角色</div>
+                <div className="text-slate-400 text-xs leading-relaxed">数据可能未加载完成。请退回桌面后重新进入；若仍为空，重启应用即可恢复。</div>
+                <button onClick={closeApp} className="mt-2 px-4 py-2 rounded-full bg-slate-800 text-white text-xs">返回桌面</button>
+            </div>
+        );
+    }
+
+    // 动森彩蛋模式（受「聊天联动」开关控制：关掉则聊天保持原样式）
+    const acnh = osTheme.skin === 'animalcrossing' && osTheme.acnhChatSync !== false;
     const chatChromeStyle = osTheme.chatChromeStyle || 'soft';
     const chatBackgroundStyle = osTheme.chatBackgroundStyle || 'plain';
     const chatRootClass =
@@ -2018,16 +2191,67 @@ const Chat: React.FC = () => {
               : {
                   backgroundImage: 'none',
                 };
+    // 动森彩蛋：浅奶油米黄中心（上下绿条由 header/输入栏负责），配色参考 Pocket Camp。
+    const acnhRootClass = 'flex flex-col h-full overflow-hidden relative font-sans transition-[background-color] duration-500';
+    const acnhRootStyle: React.CSSProperties = {
+        backgroundColor: '#F6F0D8',
+        backgroundImage: 'none',
+    };
+    const finalRootClass = acnh ? acnhRootClass : chatRootClass;
+    // 动森下强制覆盖角色自定义聊天背景，保证整机一致的彩蛋观感
+    // 进入/切换的过场由 CharacterEntryTransition 覆盖层负责，根容器不再自己做淡入。
+    const finalRootStyle = acnh ? acnhRootStyle : chatRootStyle;
     const chatAvatarSizeClass = osTheme.chatAvatarSize === 'small' ? 'w-7 h-7' : osTheme.chatAvatarSize === 'large' ? 'w-12 h-12' : 'w-9 h-9';
     const chatAvatarRadiusClass = osTheme.chatAvatarShape === 'square' ? 'rounded-sm' : osTheme.chatAvatarShape === 'rounded' ? 'rounded-xl' : 'rounded-full';
     const chatPendingAvatarClass = `${chatAvatarSizeClass} ${chatAvatarRadiusClass} object-cover`;
 
     return (
-        <div 
-            className={chatRootClass}
-            style={chatRootStyle}
+        <div
+            className={`sully-chat-root ${finalRootClass}`}
+            style={finalRootStyle}
         >
+             {/* 白框自定义 CSS：全局默认在前、角色专属在后（后者叠加覆盖）。作用于 .sully-chat-* 各零件。 */}
+             {osTheme.chatChromeCustomCss && <style>{osTheme.chatChromeCustomCss}</style>}
+             {char.chromeCustomCss && <style>{char.chromeCustomCss}</style>}
+             {/* 守护样式（注在用户 CSS 之后）：保证返回键永远可见可点 —— 防止坏 CSS 把它隐藏/变透明/拦截点击，
+                 让用户在样式写崩时仍能退出聊天（再去「外观→聊天界面→一键还原」清掉坏 CSS）。不锁位置，正常挪位仍可用。 */}
+             {(osTheme.chatChromeCustomCss || char.chromeCustomCss) && (
+               <style>{`.sully-chat-back{visibility:visible!important;opacity:1!important;pointer-events:auto!important;}`}</style>
+             )}
+             {/* 角色「登场」过场：切换/进入时以 ta 的头像氛围铺底登场，再推进穿过进入聊天。key 切换即重放。 */}
+             {showEntry && char && (
+               <CharacterEntryTransition
+                 key={activeCharacterId}
+                 name={char.name}
+                 avatar={char.avatar}
+                 onDone={() => setShowEntry(false)}
+               />
+             )}
+
              {activeTheme.customCss && <style>{activeTheme.customCss}</style>}
+
+             {/* 动森彩蛋：作用域 CSS 覆盖气泡——奶油 AI 气泡 + 蜜桃用户气泡，暖棕文字，绕开 MessageItem 复杂逻辑 */}
+             {acnh && <style>{`
+                .sully-bubble-ai {
+                    background: #FBF4DE !important;
+                    color: #6b5a3e !important;
+                    border: 1.5px solid #efe6c8 !important;
+                    border-radius: 24px !important;
+                    box-shadow: 0 4px 10px -5px rgba(120,95,45,0.28) !important;
+                }
+                .sully-bubble-user {
+                    background: #F5C896 !important;
+                    color: #6b4a2f !important;
+                    border: 1.5px solid #eeb87f !important;
+                    border-radius: 24px !important;
+                    box-shadow: 0 4px 10px -5px rgba(150,100,55,0.32) !important;
+                }
+                /* 仅动森：聊天正文放大一点 */
+                .sully-bubble-ai .text-\\[15px\\], .sully-bubble-user .text-\\[15px\\] {
+                    font-size: 16.5px !important;
+                    line-height: 1.7 !important;
+                }
+             `}</style>}
 
              {/* 记忆整理中 — 顶部浮动胶囊（不阻塞交互，轻量无 backdrop-filter） */}
              {memoryPalaceStatus && (
@@ -2220,6 +2444,8 @@ const Chat: React.FC = () => {
                 onSetChatVoiceLang={(lang: string) => updateCharacter(char.id, { chatVoiceLang: lang })}
                 voiceAvailable={!!(char.voiceProfile?.voiceId || char.voiceProfile?.timberWeights?.length)}
                 onGenerateVoice={selectedMessage ? () => handleManualTts(selectedMessage) : undefined}
+                voiceDownloadable={!!(selectedMessage?.id && voiceDataMap[selectedMessage.id])}
+                onDownloadVoice={selectedMessage ? () => handleDownloadVoice(selectedMessage) : undefined}
                 scheduleData={scheduleData}
                 isScheduleGenerating={isScheduleGenerating}
                 onScheduleEdit={handleScheduleEdit}
@@ -2279,6 +2505,8 @@ const Chat: React.FC = () => {
                 headerDensity={osTheme.chatHeaderDensity}
                 statusStyle={osTheme.chatStatusStyle}
                 chromeStyle={osTheme.chatChromeStyle}
+                hideBuffs={osTheme.chatHideHeaderBuffs}
+                acnh={acnh}
              />
 
             {/* 认知消化结果弹窗 — 全屏玻璃拟态 */}
@@ -2459,7 +2687,7 @@ const Chat: React.FC = () => {
                             voiceData={voiceDataMap[m.id]}
                             voiceLoading={voiceLoading.has(m.id)}
                             isVoicePlaying={playingMsgId === m.id}
-                            onPlayVoice={() => handlePlayVoice(m.id)}
+                            onPlayVoice={onPlayVoiceStable}
                             avatarShape={osTheme.chatAvatarShape}
                             avatarSize={osTheme.chatAvatarSize}
                             avatarMode={osTheme.chatAvatarMode}
@@ -2471,11 +2699,7 @@ const Chat: React.FC = () => {
                             onMcdSendCart={handleMcdSendCart}
                             onMcdCandidate={handleMcdCandidate}
                             onCommerceCardAction={handleCommerceCardAction}
-                            thinkingChainOptions={{
-                                styleId: (char as any).thinkingChainStyle || 'echo',
-                                customColors: (char as any).thinkingChainCustomColors,
-                                onOpenSettings: () => setShowThinkingChainModal(true),
-                            }}
+                            thinkingChainOptions={thinkingChainOptions}
                         />
                         </div>
                     );
@@ -2566,6 +2790,36 @@ const Chat: React.FC = () => {
                         </button>
                     </div>
                 )}
+                {luckinActivated && (
+                    <div className="flex items-center justify-between px-4 py-1.5 bg-[#0B1F3A]/5 border-b border-[#0B1F3A]/15 text-xs">
+                        <div className="flex items-center gap-1.5 text-[#0B1F3A] font-bold">
+                            <span className="inline-block w-1.5 h-1.5 rounded-full bg-[#C6A15B] animate-pulse"/>
+                            🦌 瑞一杯进行中
+                            {luckinChatRef.current?.cityName && <span className="font-normal text-[#0B1F3A]/60">· {luckinChatRef.current.cityName}</span>}
+                        </div>
+                        <div className="flex items-center gap-1.5">
+                            <button
+                              onClick={() => setShowLuckinHelp(true)}
+                              title="瑞一杯怎么用"
+                              className="w-5 h-5 flex items-center justify-center bg-[#0B1F3A]/10 text-[#0B1F3A] rounded-full text-[11px] font-bold active:scale-95"
+                            >
+                              ?
+                            </button>
+                            <button
+                              onClick={() => setShowLuckinLoc(true)}
+                              className="px-2.5 py-0.5 bg-[#0B1F3A]/10 text-[#0B1F3A] rounded-full text-[11px] font-bold active:scale-95"
+                            >
+                              📍 改定位
+                            </button>
+                            <button
+                              onClick={deactivateLuckin}
+                              className="px-2.5 py-0.5 bg-[#0B1F3A]/10 text-[#0B1F3A] rounded-full text-[11px] font-bold active:scale-95"
+                            >
+                              结束
+                            </button>
+                        </div>
+                    </div>
+                )}
                 {replyTarget && (
                     <div className="flex items-center justify-between px-4 py-2 bg-slate-50 border-b border-slate-200 text-xs text-slate-500">
                         <div className="flex items-center gap-2 truncate"><span className="font-bold text-slate-700">正在回复:</span><span className="truncate max-w-[200px]">{replyTarget.content.length > 10 ? replyTarget.content.slice(0, 10) + '...' : replyTarget.content}</span></div>
@@ -2596,11 +2850,14 @@ const Chat: React.FC = () => {
                     isProactiveActive={isProactiveActive}
                     mcdConfigured={mcdConfiguredFlag}
                     mcdActivated={mcdActivated}
+                    luckinConfigured={luckinConfiguredFlag}
+                    luckinActivated={luckinActivated}
                     htmlModeEnabled={!!(char as any).htmlModeEnabled}
                     showThinkingChain={!!(char as any).showThinkingChain}
                     inputStyle={osTheme.chatInputStyle}
                     sendButtonStyle={osTheme.chatSendButtonStyle}
                     chromeStyle={osTheme.chatChromeStyle}
+                    acnh={acnh}
                 />
             </div>
 
@@ -2656,6 +2913,46 @@ const Chat: React.FC = () => {
                 />
             )}
 
+            {/* 角色专属「白框自定义」Modal —— 从加号面板「白框」进入；写到 char.chromeCustomCss，叠加在全局之上 */}
+            {char && modalType === 'chrome-css' && (
+                <div className="fixed inset-0 z-[110] flex items-end justify-center bg-black/5" onClick={() => setModalType('none')}>
+                    <div
+                        className="w-full max-h-[68vh] overflow-y-auto rounded-t-3xl border-t border-white/60 bg-white/95 p-5 shadow-[0_-12px_40px_rgba(15,23,42,0.18)] backdrop-blur-xl [-ms-overflow-style:none] [scrollbar-width:none] [&::-webkit-scrollbar]:hidden"
+                        style={{ paddingBottom: 'calc(1.25rem + var(--safe-bottom))' }}
+                        onClick={(e) => e.stopPropagation()}
+                    >
+                        <div className="mb-2 flex items-start justify-between">
+                            <div>
+                                <div className="text-sm font-bold text-slate-800">白框自定义 · {char.name}</div>
+                                <div className="mt-0.5 text-[10px] text-slate-400">↑ 上方聊天界面即实时预览；仅对该角色生效，叠加在全局设置之上。</div>
+                            </div>
+                            <button onClick={() => setModalType('none')} className="px-2 text-xl leading-none text-slate-400 hover:text-slate-600">{'×'}</button>
+                        </div>
+                        <ChromeCssEditor value={char.chromeCustomCss || ''} onChange={(css) => updateCharacter(char.id, { chromeCustomCss: css } as any)} />
+                    </div>
+                    {/* 脱离 CSS 控制的救援键：只在「白框」自定义弹窗开着时出现（平时不显示，不丑）。portal 到 body
+                        在聊天 DOM 之外 + id 守护(#sully-safe-reset 特异性高于 *)，连 *{display:none!important} 也盖不掉，
+                        保证你刚粘进坏 CSS 当场崩掉时，这个还原键一定点得到。 */}
+                    {createPortal(
+                        <>
+                            <style>{`#sully-safe-reset{position:fixed!important;top:calc(var(--safe-top) + 6px)!important;left:50%!important;transform:translateX(-50%)!important;visibility:visible!important;opacity:1!important;pointer-events:auto!important;display:flex!important;z-index:2147483647!important;}`}</style>
+                            <button
+                                id="sully-safe-reset"
+                                onClick={() => { updateCharacter(char.id, { chromeCustomCss: '' } as any); addToast('已还原该角色白框', 'success'); }}
+                                style={{
+                                    position: 'fixed', top: 'calc(var(--safe-top) + 6px)', left: '50%', transform: 'translateX(-50%)',
+                                    zIndex: 2147483647, display: 'flex', alignItems: 'center', gap: '4px',
+                                    padding: '5px 12px', borderRadius: '999px',
+                                    background: 'rgba(15,23,42,0.62)', color: '#fff', fontSize: '11px', fontWeight: 700,
+                                    border: '1px solid rgba(255,255,255,0.3)', cursor: 'pointer', boxShadow: '0 2px 10px rgba(0,0,0,0.35)',
+                                }}
+                            >⟲ 还原此角色白框</button>
+                        </>,
+                        document.body,
+                    )}
+                </div>
+            )}
+
             {/* 情绪设置已嵌入日程 Modal（与日程强制同步开/关），不再单独渲染 */}
 
 
@@ -2684,92 +2981,32 @@ const Chat: React.FC = () => {
                 onConfirmOrder={handleMcdAppConfirm}
             />
 
+            {/* 🦌 瑞幸小程序 - 与麦当劳同构 */}
+            <LuckinMiniApp
+                open={luckinAppOpen}
+                onClose={() => setLuckinAppOpen(false)}
+                char={char}
+                userProfile={userProfile}
+                messages={messages}
+                isTyping={isTyping}
+                onSendMessage={handleLuckinMiniAppSend}
+                onStateChange={handleLuckinMiniAppStateChange}
+                onConfirmOrder={handleLuckinAppConfirm}
+            />
 
-            {/* 🛟 人格抢救 Modal —— 把"情感型 0.3"默认值卡住的角色偷偷救活 */}
-            <Modal
-                isOpen={personalityRescue.open}
-                title={
-                    personalityRescue.open && personalityRescue.phase === 'rescuing' ? '糯米鸡抢救中…' :
-                    personalityRescue.open && personalityRescue.phase === 'done' ? '抢救完成！' :
-                    personalityRescue.open && personalityRescue.phase === 'failed' ? '抢救失败' :
-                    '糯米鸡抢救中…'
-                }
-                onClose={() => {
-                    // rescuing 阶段不给关，必须看到结果；其它阶段允许关闭
-                    if (personalityRescue.open && personalityRescue.phase === 'rescuing') return;
-                    setPersonalityRescue({ open: false });
-                }}
-                footer={
-                    personalityRescue.open && personalityRescue.phase !== 'rescuing' ? (
-                        <button
-                            onClick={() => setPersonalityRescue({ open: false })}
-                            className="w-full py-3 bg-purple-600 text-white font-bold rounded-2xl active:scale-95 transition-transform"
-                        >
-                            好
-                        </button>
-                    ) : undefined
-                }
-            >
-                {personalityRescue.open && personalityRescue.phase === 'rescuing' && (
-                    <div className="space-y-3 py-2">
-                        <p className="text-sm text-slate-600 leading-relaxed text-center">
-                            角色的后台有点 bug，糯米鸡抢救一下，马上就好 ✨
-                        </p>
-                        <p className="text-xs text-slate-400 text-center">
-                            正在重新分析 <span className="font-semibold text-slate-600">{personalityRescue.charName}</span> 的认知风格…
-                        </p>
-                        <div className="flex justify-center pt-2">
-                            <div className="w-8 h-8 border-4 border-purple-200 border-t-purple-600 rounded-full animate-spin" />
-                        </div>
-                    </div>
-                )}
-                {personalityRescue.open && personalityRescue.phase === 'done' && (() => {
-                    const styleLabel =
-                        personalityRescue.result.style === 'emotional' ? '情感型' :
-                        personalityRescue.result.style === 'narrative' ? '叙事型' :
-                        personalityRescue.result.style === 'imagery' ? '意象型' :
-                        personalityRescue.result.style === 'analytical' ? '分析型' :
-                        personalityRescue.result.style;
-                    return (
-                        <div className="space-y-3 py-2">
-                            <p className="text-xs text-slate-400 text-center">
-                                <span className="font-semibold text-slate-600">{personalityRescue.charName}</span> 的认知参数已重新生成 🎉
-                            </p>
-                            <div className="bg-purple-50 rounded-2xl p-4 space-y-2 border border-purple-100">
-                                <div className="flex justify-between text-sm">
-                                    <span className="text-slate-500">认知风格</span>
-                                    <span className="font-bold text-purple-700">{styleLabel}</span>
-                                </div>
-                                <div className="flex justify-between text-sm">
-                                    <span className="text-slate-500">反刍倾向</span>
-                                    <span className="font-bold text-purple-700">{personalityRescue.result.ruminationTendency.toFixed(1)}</span>
-                                </div>
-                            </div>
-                            {personalityRescue.result.reasoning && (
-                                <p className="text-xs text-slate-500 leading-relaxed px-1">
-                                    <span className="text-slate-400">糯米鸡的判断：</span>
-                                    {personalityRescue.result.reasoning}
-                                </p>
-                            )}
-                        </div>
-                    );
-                })()}
-                {personalityRescue.open && personalityRescue.phase === 'failed' && (
-                    <div className="space-y-3 py-2">
-                        <p className="text-sm text-slate-600 text-center">
-                            糯米鸡也没救回来 😢
-                        </p>
-                        <p className="text-xs text-slate-400 leading-relaxed text-center">
-                            下次打开聊天再试一次，或去记忆宫殿检查一下副 API 配置。
-                        </p>
-                        <div className="bg-red-50 rounded-xl p-3 border border-red-100">
-                            <p className="text-[11px] text-red-600 break-all font-mono">
-                                {personalityRescue.error}
-                            </p>
-                        </div>
-                    </div>
-                )}
-            </Modal>
+            {/* 🦌 瑞一杯定位选择 */}
+            <LuckinLocationModal
+                open={showLuckinLoc}
+                onClose={() => setShowLuckinLoc(false)}
+                onPick={onLuckinLocationPick}
+            />
+
+            {/* 🦌 瑞一杯使用说明 (首次自动弹 + banner ? 调出) */}
+            <LuckinHelpModal
+                open={showLuckinHelp}
+                onClose={() => setShowLuckinHelp(false)}
+            />
+
 
             {/* Forward Modal */}
             <Modal isOpen={showForwardModal} title="转发聊天记录" onClose={() => setShowForwardModal(false)}>

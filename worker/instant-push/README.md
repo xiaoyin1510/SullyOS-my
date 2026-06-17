@@ -4,16 +4,20 @@
 收到前端的 POST 请求后，调用你自己的 OpenAI 兼容 LLM，把回复分句后逐条发成 Web Push 通知。
 默认零数据库、零 cron；大包默认走 `_multipart` 分片传输。想要更稳的大对象传输时，可以额外启用 D1 BlobStore，Worker 会自动建表并顺手清理过期数据。
 
+> **改这里的 `sse: { backupPush: 'on' }` 配置或前端 catch 逻辑前**，先读 [`docs/instant-push-dual-channel.md`](../../docs/instant-push-dual-channel.md)。SSE 跟 Web Push 是并发双通道、SW 端按 messageId 去重 —— 这是个**结构性契约**，破了就会重现 iOS PWA「报错但收到消息」的 bug。`backupPush='on'` 在 amsg-instant 0.9+ 是强制的，库会直接拒绝其他值。
+
 ---
 
 ## 文件说明
 
 | 文件 | 说明 |
 |------|------|
-| `src/index.ts` | Worker 源码入口（极薄封装） |
+| `src/index.ts` | Worker 源码入口（极薄封装，平台无关） |
+| `src/deno.ts` | Deno Deploy 入口：`Deno.serve` 包装 + env 读取 + 平台边界注释 |
 | `wrangler.toml` | CF Worker 部署配置 |
 | `package.json` | 子目录依赖声明 —— CF Workers Builds 用它跑 `npm install + wrangler deploy` |
-| `worker.bundle.js` | 已打包好的 Worker，**仅备用方案**：复制到 CF 控制台直接部署 |
+| `worker.bundle.js` | 已打包好的 CF Worker：复制到 CF 控制台直接部署 |
+| `worker.deno.bundle.js` | 已打包好的 Deno 版。一般不直接贴它——App 内「复制 Deno Loader」给的 8 行 loader 会在冷启动时自动拉它的最新版 |
 
 ---
 
@@ -27,9 +31,28 @@
 
 ---
 
-## 阶段 2：在 Cloudflare 部署 Worker
+## 阶段 2：部署 Worker
 
-### 主方案：用 Git URL 克隆（推荐）
+### 方式 A：Deno Deploy Playground（推荐，自动追新）
+
+全程手机浏览器可完成，且部署一次后**永久自动追新**——loader 在每次冷启动时
+自动拉取站点发布的最新 worker 代码，上游更新后只需进 Playground 重新部署一次
+（保存即可），不用再搬代码。
+
+1. 打开 **SullyOS → 设置 → Instant 消息设置**，点「复制 Deno Loader」（仅 8 行）
+2. 访问 [app.deno.com](https://app.deno.com)（注意是新版控制台；旧版 dash.deno.com 将于 2026-07 停服），New Playground，粘贴 loader，部署
+3. 在 Playground 的环境变量里填入阶段 1 的 `VAPID_PUBLIC_KEY` / `VAPID_PRIVATE_KEY`
+   （可选项见阶段 3 的表格，含义与 CF 一致）
+4. 记录 Worker 地址：`https://<项目名>.<你的账号>.deno.net`
+
+> Deno 路线不支持 D1 BlobStore（`/capabilities` 会如实报告），大包自动走默认的
+> multipart 分片，无需任何额外配置。
+>
+> 平台边界一句话版：客户端断开（杀 App）后实例还能存活约 20-30 秒，与 CF 的
+> 30 秒宽限同量级——「发完消息立刻杀 App + LLM 超过半分钟才回完」的极端组合
+> 在两个平台上都可能丢当条回复，重发即可。
+
+### 方式 B：Cloudflare · 用 Git URL 克隆
 
 1. 访问 [dash.cloudflare.com](https://dash.cloudflare.com/) → Workers & Pages → Create → Worker
 2. 选择 **Clone a public repository via Git URL**
@@ -53,7 +76,7 @@
 > 想吃到最新 worker 代码，最稳的是用下面的「备用方案」重贴一次 `worker.bundle.js`。
 > 另外，后端更新时我们会在 App 内**弹窗提醒**已启用 Instant Push 的用户来更新。
 
-### 备用方案：复制 `worker.bundle.js`
+### 方式 C：Cloudflare · 复制 `worker.bundle.js`
 
 CF 后台连不上 GitHub、或者你 fork 了私有副本不想接 OAuth 时用这条路：
 
@@ -70,7 +93,7 @@ CF 后台连不上 GitHub、或者你 fork 了私有副本不想接 OAuth 时用
 
 ## 阶段 3：配置环境变量
 
-在 Worker 详情页 → **Settings → Variables and Secrets** 里依次添加：
+Deno：Playground 设置里的环境变量面板；CF：Worker 详情页 → **Settings → Variables and Secrets**。依次添加：
 
 ### 必填（2 个）
 
@@ -128,10 +151,12 @@ iOS 要求把 SullyOS 以 PWA 方式安装到主屏幕才能收 Web Push；Safar
 安卓国行手机若无 Google 服务（GMS），Web Push 通道不通，换 Chrome 桌面版测试确认链路，App 内通知走 Capacitor 本地通知不受影响。
 
 **Q：想暂停推送怎么办？**
-在 CF 后台把 Worker 暂停（Pause）即可，前端数据不丢。重新启用后恢复正常。
+最简单的是前端关掉 Instant Push 开关（两个平台通用）。
+CF 还可以在后台把 Worker 暂停（Pause），前端数据不丢，重新启用后恢复正常。
 
 **Q：怎么彻底删除？**
-CF 后台 → Workers & Pages → 找到该 Worker → Settings → Delete。
+Deno：app.deno.com 里删除该 Playground 应用；
+CF：后台 → Workers & Pages → 找到该 Worker → Settings → Delete。
 前端在 SullyOS → 设置 → Instant Push 关掉开关即可停止发起请求。
 
 **Q：LLM 调用费用谁出？**

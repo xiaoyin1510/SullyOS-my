@@ -25,6 +25,16 @@ const WORKER_URL = 'https://noir2.cc.cd';
 const CLIENT_TOKEN = 'weqwqewqeqwdcsccagdgs32132';
 // ═══════════════════════════════════════════════════════════════════
 
+// ── 全局停用开关（KILL SWITCH）─────────────────────────────────────
+// 主动消息 Push 加速这层已经全局下线（设置面板也藏了）。已经开过的用户
+// localStorage 里 proactive_push_enabled_v1 还是 'true'，光藏 UI 改不了，
+// 他们的客户端会照常心跳、Worker 照常发 wake push。把这里设成 true 后，
+// loadPushConfig() 一律返回 enabled=false：心跳不再启动、不再向 Worker
+// 注册，Worker 在心跳窗口（默认 5 分钟）内自动对这些设备停发。
+// 注意：只关掉 Worker 加速层，proactiveChat.ts 的本地定时主动消息不受影响。
+const FORCE_DISABLED = true;
+// ───────────────────────────────────────────────────────────────────
+
 import { loadPushVapid, isPushVapidReady } from './pushVapid';
 import { KeepAlive } from './keepAlive';
 import {
@@ -47,9 +57,12 @@ export interface ProactivePushConfig {
 
 export function loadPushConfig(): ProactivePushConfig {
   let enabled = false;
-  try {
-    enabled = localStorage.getItem(ENABLED_STORAGE_KEY) === 'true';
-  } catch { /* ignore */ }
+  // 全局 kill switch：下线后无论 localStorage 里存的是什么，一律当关闭处理。
+  if (!FORCE_DISABLED) {
+    try {
+      enabled = localStorage.getItem(ENABLED_STORAGE_KEY) === 'true';
+    } catch { /* ignore */ }
+  }
   return {
     enabled,
     workerUrl: WORKER_URL.trim().replace(/\/+$/, ''),

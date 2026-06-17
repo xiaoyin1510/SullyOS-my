@@ -63,6 +63,31 @@ describe('openDB 失效自愈', () => {
   });
 });
 
+// 现有版本高于当前 build 的 DB_VERSION 时 (用户先跑过更新的 build / 另一 tab 升过级 /
+// SW 缓存了更新的 bundle), 带 DB_VERSION 打开会抛 VersionError —— 旧逻辑直接 reject,
+// 整个 origin 的 IndexedDB 全挂 (SYSTEM ERROR、美化读不出来、线下进不去)。修复后回退到
+// 「不带版本号打开」, 连到现有更高版本 (store 是超集, 读写兼容)。
+describe('openDB 版本回退 (现有版本高于当前 build)', () => {
+  it('遇到 VersionError 时不带版本号回退打开, 不再整库报错', async () => {
+    await DB.deleteDB(); // 复位 + 清掉单例连接
+
+    // 裸开一条「比 DB_VERSION 更高」的连接建库后关闭, 制造现有版本偏高的现场
+    const hi = await new Promise<IDBDatabase>((resolve, reject) => {
+      const r = indexedDB.open('AetherOS_Data', 999);
+      r.onsuccess = () => resolve(r.result);
+      r.onerror = () => reject(r.error);
+    });
+    hi.close();
+
+    // openDB 带 DB_VERSION(<999) 打开 → VersionError → 回退到不带版本号 → 连到 v999
+    const db = await openDB();
+    expect(db).toBeTruthy();
+    expect(db.version).toBe(999);
+
+    await DB.deleteDB(); // 收尾, 避免污染后续用例
+  });
+});
+
 describe('DB.deleteDB', () => {
   it('删库前先关掉单例连接, 不被本页自己的连接 block', async () => {
     await openDB(); // 建立单例连接
