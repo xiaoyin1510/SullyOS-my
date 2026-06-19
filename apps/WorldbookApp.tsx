@@ -12,6 +12,9 @@ const WorldbookApp: React.FC = () => {
     const [editingBook, setEditingBook] = useState<Worldbook | null>(null);
     const [expandedCategory, setExpandedCategory] = useState<string | null>(null);
     const [previewBookId, setPreviewBookId] = useState<string | null>(null);
+    const [categoryPages, setCategoryPages] = useState<Record<string, number>>({});
+
+    const PAGE_SIZE = 12;
 
     // Edit Form State
     const [tempTitle, setTempTitle] = useState('');
@@ -102,6 +105,10 @@ const WorldbookApp: React.FC = () => {
 
     const toggleCategory = (cat: string) => {
         setExpandedCategory(expandedCategory === cat ? null : cat);
+    };
+
+    const setCategoryPage = (cat: string, page: number) => {
+        setCategoryPages(prev => ({ ...prev, [cat]: page }));
     };
 
     const togglePreview = (id: string) => {
@@ -198,10 +205,14 @@ const WorldbookApp: React.FC = () => {
                     </div>
                 )}
 
-                {Object.entries(groupedBooks).map(([category, books]) => (
+                {Object.entries(groupedBooks).map(([category, books]) => {
+                    const totalPages = Math.max(1, Math.ceil(books.length / PAGE_SIZE));
+                    const currentPage = Math.min(categoryPages[category] || 1, totalPages);
+                    const pagedBooks = books.slice((currentPage - 1) * PAGE_SIZE, currentPage * PAGE_SIZE);
+                    return (
                     <div key={category} className="animate-slide-up">
                         {/* Category Header */}
-                        <div 
+                        <div
                             onClick={() => toggleCategory(category)}
                             className="flex items-center gap-2 py-2 px-1 cursor-pointer select-none group"
                         >
@@ -213,8 +224,8 @@ const WorldbookApp: React.FC = () => {
                         </div>
 
                         {/* Group Items */}
-                        <div className={`space-y-3 pl-2 transition-all duration-300 overflow-hidden ${expandedCategory === category ? 'max-h-[1000px] opacity-100 mt-2' : 'max-h-0 opacity-0'}`}>
-                            {books.map(book => (
+                        <div className={`space-y-3 pl-2 transition-all duration-300 ${expandedCategory === category ? 'opacity-100 mt-2' : 'max-h-0 opacity-0 overflow-hidden'}`}>
+                            {pagedBooks.map(book => (
                                 <div key={book.id} className="bg-white/60 backdrop-blur-md rounded-2xl border border-white/60 shadow-sm hover:shadow-md transition-all group relative overflow-hidden">
                                     {/* Item Header */}
                                     <div 
@@ -260,9 +271,31 @@ const WorldbookApp: React.FC = () => {
                                     )}
                                 </div>
                             ))}
+
+                            {/* Pagination */}
+                            {totalPages > 1 && (
+                                <div className="flex items-center justify-center gap-2 pt-1 pb-2 select-none">
+                                    <button
+                                        onClick={() => setCategoryPage(category, currentPage - 1)}
+                                        disabled={currentPage <= 1}
+                                        className="px-3 py-1.5 rounded-full text-xs font-bold bg-white/70 border border-white/60 text-slate-500 shadow-sm active:scale-95 transition-transform disabled:opacity-40 disabled:active:scale-100"
+                                    >
+                                        上一页
+                                    </button>
+                                    <span className="text-[11px] font-mono text-slate-400 min-w-[3rem] text-center">{currentPage} / {totalPages}</span>
+                                    <button
+                                        onClick={() => setCategoryPage(category, currentPage + 1)}
+                                        disabled={currentPage >= totalPages}
+                                        className="px-3 py-1.5 rounded-full text-xs font-bold bg-white/70 border border-white/60 text-slate-500 shadow-sm active:scale-95 transition-transform disabled:opacity-40 disabled:active:scale-100"
+                                    >
+                                        下一页
+                                    </button>
+                                </div>
+                            )}
                         </div>
                     </div>
-                ))}
+                    );
+                })}
             </div>
 
             {/* Delete Confirmation Modal */}

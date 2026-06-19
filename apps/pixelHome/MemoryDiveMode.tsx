@@ -19,7 +19,7 @@ import type {
   DiveResult, RoomExploreState, RoomScript, DiveScriptChoice,
 } from './memoryDiveTypes';
 import { BUFF_META } from './memoryDiveTypes';
-import { ROOM_META } from './roomTemplates';
+import { ROOM_META, roomDisplayName } from './roomTemplates';
 import { ContextBuilder } from '../../utils/context';
 import {
   planRoomVisit,
@@ -290,7 +290,7 @@ const MemoryDiveMode: React.FC<Props> = ({
     try {
       const res = await planRoomVisit(
         {
-          charId, charName, room: s.currentRoom,
+          charId, charName, userName, room: s.currentRoom,
           beatCount: BEATS_PER_ROOM,
           visitedRooms: s.visitedRooms,
           recentDialogues: s.dialogues.slice(-10),
@@ -348,7 +348,7 @@ const MemoryDiveMode: React.FC<Props> = ({
     try {
       const res = await planRoomVisit(
         {
-          charId, charName, room: next,
+          charId, charName, userName, room: next,
           beatCount: BEATS_PER_ROOM,
           visitedRooms: s.visitedRooms,
           recentDialogues: s.dialogues.slice(-10),
@@ -560,7 +560,7 @@ const MemoryDiveMode: React.FC<Props> = ({
     }
 
     // 设置转场加载文案
-    setLoadingText(`走向${ROOM_META[roomId].name}`);
+    setLoadingText(`走向${roomDisplayName(roomId, userName)}`);
 
     setTransitionState('out');
     await new Promise(res => window.setTimeout(res, TRANSITION_HALF_MS));
@@ -610,6 +610,7 @@ const MemoryDiveMode: React.FC<Props> = ({
       // fire-and-forget
       emitDiveEmotion({
         charProfile,
+        userName,
         diveDialogues: s.dialogues,
         diveBuffs: s.buffValues,
         visitedRooms: s.visitedRooms,
@@ -744,7 +745,7 @@ const MemoryDiveMode: React.FC<Props> = ({
             </svg>
           </button>
           <span className="text-[10px] font-bold text-violet-300 ml-0.5">
-            🌀 {meta.emoji} {meta.name}
+            🌀 {meta.emoji} {roomDisplayName(session.currentRoom, userName)}
           </span>
         </div>
         <div className="flex items-center gap-1.5">
@@ -802,7 +803,7 @@ const MemoryDiveMode: React.FC<Props> = ({
 
       {/* 下屏：梦核氛围面板——房间名 + 本次召回的记忆碎片 / 加载引导 / 错误重试 */}
       <MemoryDiveAmbient
-        roomName={meta.name}
+        roomName={roomDisplayName(session.currentRoom, userName)}
         memoryFragments={roomMemoryTexts}
         isLoading={isLoadingDialogueState}
         loadingText={loadingText}

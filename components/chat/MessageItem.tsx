@@ -2204,7 +2204,7 @@ const MessageItem = React.memo(({
         // Residual action/system tags that may have leaked through
         .replace(/\[\[(?:ACTION|RECALL|SEARCH|DIARY|READ_DIARY|FS_DIARY|FS_READ_DIARY|SEND_EMOJI|DIARY_START|DIARY_END|FS_DIARY_START|FS_DIARY_END)[:\s][\s\S]*?\]\]/g, '')
         .replace(/\[schedule_message[^\]]*\]/g, '')
-        .replace(/<[语語]音>[\s\S]*?<\/[语語]音>/g, '')  // strip <语音>...</语音> voice tags
+        .replace(/<[语語]音[^>]*>[\s\S]*?<\/[语語]音>/g, '')  // strip <语音 ...>...</语音> voice tags (tolerate emotion attr)
         .replace(/^\s*---\s*$/gm, '')                // standalone --- lines
         .replace(/``+/g, '')                          // empty/stray backtick pairs
         .replace(/(^|\s)`(\s|$)/gm, '$1$2')         // lone backticks at boundaries
@@ -2228,11 +2228,11 @@ const MessageItem = React.memo(({
     const showTranslateButton = translationEnabled && hasBilingual && langBContent;
 
     // Check if raw content has a <语音> tag (voice-only message that hasn't been TTS'd yet)
-    const hasVoiceTag = !isUser && /<[语語]音>[\s\S]*?<\/[语語]音>/.test(m.content);
+    const hasVoiceTag = !isUser && /<[语語]音[^>]*>[\s\S]*?<\/[语語]音>/.test(m.content);
     // Spoken text inside the <语音> tag — lets the placeholder bar offer a 转文字 toggle
     // even when no audio was synthesized (e.g. character has no MiniMax voice configured),
     // so fake voice messages stay readable just like real ones.
-    const voiceTagText = hasVoiceTag ? (m.content.match(/<[语語]音>([\s\S]*?)<\/[语語]音>/)?.[1]?.trim() || '') : '';
+    const voiceTagText = hasVoiceTag ? (m.content.match(/<[语語]音[^>]*>([\s\S]*?)<\/[语語]音>/)?.[1]?.trim() || '') : '';
     const hasVoiceContent = voiceData?.url || voiceLoading || hasVoiceTag;
     // Don't render empty bubbles (e.g. messages that were just "---"), unless voice data exists or pending
     if (!displayContent && !hasVoiceContent) return null;

@@ -7,6 +7,7 @@ import { DatePrompts, ApiMessage } from '../utils/datePrompts';
 import { processNewMessages, mergePalaceFragmentsIntoMemories, getMemoryPalaceHighWaterMark } from '../utils/memoryPalace/pipeline';
 import type { PipelineResult } from '../utils/memoryPalace/pipeline';
 import { incrementDigestRound, runCognitiveDigestion } from '../utils/memoryPalace';
+import { getRoomLabel } from '../utils/memoryPalace/types';
 import { safeResponseJson } from '../utils/safeApi';
 import Modal from '../components/os/Modal';
 import DateSession from '../components/date/DateSession';
@@ -731,6 +732,7 @@ const DateApp: React.FC = () => {
                                         windowsill: { label: '窗台', color: '#14b8a6' },
                                     };
                                     const meta = roomMeta[m.room] || { label: m.room, color: '#64748b' };
+                                    const roomLabel = getRoomLabel(m.room as any, userProfile?.name) || meta.label;
                                     return (
                                         <div
                                             key={i}
@@ -745,7 +747,7 @@ const DateApp: React.FC = () => {
                                                 <span className="text-[10px] px-2 py-0.5 rounded-full font-semibold"
                                                     style={{ background: `${meta.color}18`, color: meta.color }}
                                                 >
-                                                    {meta.label}
+                                                    {roomLabel}
                                                 </span>
                                                 <span className="text-[10px] text-slate-400">{m.mood}</span>
                                                 <span className="text-[10px] font-bold ml-auto" style={{ color: '#f59e0b' }}>{'★'.repeat(Math.min(m.importance, 5))}</span>

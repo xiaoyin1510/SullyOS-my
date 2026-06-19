@@ -85,6 +85,15 @@ export const ROOM_META: Record<MemoryRoom, { name: string; emoji: string; color:
   windowsill:  { name: '露台',     emoji: '🌱', color: '#06b6d4', description: '期盼、愿望与未来' },
 };
 
+/**
+ * 房间显示名。user_room 在有用户名时显示为「{用户名}的房」，其余房间返回静态名。
+ * 单一来源，供地图 / 编辑器 / 潜行模式 / dive prompt 统一调用。
+ */
+export function roomDisplayName(room: MemoryRoom, userName?: string): string {
+  if (room === 'user_room' && userName) return `${userName}的房`;
+  return ROOM_META[room].name;
+}
+
 // ─── 默认墙壁/地板颜色 ─────────────────────────────
 
 export const DEFAULT_ROOM_COLORS: Record<MemoryRoom, { wall: string; floor: string }> = {

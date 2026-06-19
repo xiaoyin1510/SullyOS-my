@@ -370,6 +370,13 @@ describe('sanitizeIntoSegments', () => {
     ]);
   });
 
+  it('<语音 emotion="…"> 带情绪属性也整块保留 + banner 取内部文字', () => {
+    const segs = sanitizeIntoSegments('<语音 emotion="sad">Hello world</语音>');
+    expect(segs).toEqual([
+      { raw: '<语音 emotion="sad">Hello world</语音>', sanitized: 'Hello world' },
+    ]);
+  });
+
   it('<语音> 多行内容 → 整块单 segment, 不被 chunkText 按 \\n 切碎', () => {
     const input = '前面文字\n<语音>\nWait...\nare you serious?\n</语音>\n后面文字';
     const segs = sanitizeIntoSegments(input);

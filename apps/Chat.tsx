@@ -7,6 +7,7 @@ import { processImage } from '../utils/file';
 import { safeResponseJson, extractContent } from '../utils/safeApi';
 import { generateDailyScheduleForChar, isScheduleFeatureOn } from '../utils/scheduleGenerator';
 import { formatMessageWithTime } from '../utils/messageFormat';
+import { getRoomLabel } from '../utils/memoryPalace/types';
 import { XhsMcpClient, extractNotesFromMcpData, normalizeNote } from '../utils/xhsMcpClient';
 import { isMcdConfigured } from '../utils/mcdMcpClient';
 import { isMcdActivatedInMessages, MCD_ACTIVATE_TRIGGER, MCD_DEACTIVATE_TRIGGER } from '../utils/mcdToolBridge';
@@ -316,7 +317,7 @@ const Chat: React.FC = () => {
                 // parseVoiceOutput already sanitized it (whitelisted sound tags only).
                 spokenText = voiceTagContent;
                 // originalText = text OUTSIDE the voice tag (the display/Chinese text)
-                const textOutsideTag = msg.content.replace(/<[语語]音>[\s\S]*?<\/[语語]音>/g, '').trim();
+                const textOutsideTag = msg.content.replace(/<[语語]音[^>]*>[\s\S]*?<\/[语語]音>/g, '').trim();
                 originalText = textOutsideTag ? cleanTextForTts(textOutsideTag) : '';
                 // If voice lang is set and no Chinese text outside the tag, translate spoken text back to Chinese
                 if (voiceLang && !originalText && spokenText) {
@@ -2343,6 +2344,7 @@ const Chat: React.FC = () => {
                                      windowsill: { label: '窗台', color: '#14b8a6' },
                                  };
                                  const meta = roomMeta[m.room] || { label: m.room, color: '#64748b' };
+                                 const roomLabel = getRoomLabel(m.room as any, userProfile?.name) || meta.label;
                                  return (
                                      <div
                                          key={i}
@@ -2357,7 +2359,7 @@ const Chat: React.FC = () => {
                                              <span className="text-[10px] px-2 py-0.5 rounded-full font-semibold"
                                                  style={{ background: `${meta.color}18`, color: meta.color }}
                                              >
-                                                 {meta.label}
+                                                 {roomLabel}
                                              </span>
                                              <span className="text-[10px] text-slate-400">{m.mood}</span>
                                              <span className="text-[10px] font-bold ml-auto" style={{ color: '#f59e0b' }}>{'★'.repeat(Math.min(m.importance, 5))}</span>

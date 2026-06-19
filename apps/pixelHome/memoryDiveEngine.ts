@@ -14,7 +14,7 @@ import type { APIConfig, CharacterProfile, CharacterBuff } from '../../types';
 import { MemoryNodeDB } from '../../utils/memoryPalace/db';
 import { DB } from '../../utils/db';
 import { fetchRemoteByRoom } from '../../utils/memoryPalace/supabaseVector';
-import { ROOM_SLOTS, ROOM_META } from './roomTemplates';
+import { ROOM_SLOTS, ROOM_META, roomDisplayName } from './roomTemplates';
 import { safeFetchJson, extractContent, extractJson } from '../../utils/safeApi';
 import type {
   DiveMode, DiveLLMRequest, DiveLLMResponse, DiveChoice,
@@ -166,7 +166,7 @@ function buildDivePrompt(req: DiveLLMRequest, charContext: string): string {
 - 书房 (前额叶) — 你学到的、思考过的
 - 阁楼 (杏仁核) — 你不愿面对的东西
 - 个人房间 (默认模式网络) — 你对自己的认知
-- 用户房 (颞顶联合区) — 你对TA的全部感受
+- ${roomDisplayName('user_room', req.userName)} (颞顶联合区) — 你对TA的全部感受
 - 露台 (多巴胺系统) — 你的期盼和愿望
 
 你现在站在其中一个房间里。这些家具不是装饰品——每一件都承载着一类记忆。触碰它们，记忆就会浮现。
@@ -175,7 +175,7 @@ ${modeInstructions}${reluctanceHint}
 
 ---
 
-**当前位置**: ${roomMeta.name} (${roomMeta.emoji})
+**当前位置**: ${roomDisplayName(req.room, req.userName)} (${roomMeta.emoji})
 **脑区对应**: ${ROOM_BRAIN_MAP[req.room] || roomMeta.description}
 **此刻的氛围**: ${atmosphereText}
 ${slot ? `\n**用户正在靠近**: ${slot.name} — 这件家具承载的记忆类别是「${slot.category}」` : ''}
@@ -540,6 +540,8 @@ export function computeDiveResult(session: DiveSession): DiveResult {
 interface PlanRoomParams {
   charId: string;
   charName: string;
+  /** 映射的用户名（用于 user_room 显示「{用户名}的房」） */
+  userName?: string;
   room: MemoryRoom;
   /** 默认 3 段戏 */
   beatCount?: number;
@@ -603,7 +605,7 @@ function buildRoomScriptPrompt(
     : '';
 
   const prevMoodBlock = params.previousMoodHint
-    ? `**上个房间留下的情绪余温**（${params.previousRoom ? ROOM_META[params.previousRoom].name : '刚才'}）: ${params.previousMoodHint}
+    ? `**上个房间留下的情绪余温**（${params.previousRoom ? roomDisplayName(params.previousRoom, params.userName) : '刚才'}）: ${params.previousMoodHint}
 ⚠️ **衔接规则**：这不是从零开始的新一幕。角色刚从上个情境走过来，要延续那份情绪而不是重置。
   - 如果刚被安慰 → 这房间可以更松弛、更愿意说
   - 如果刚被追问得紧 → 这房间可以有点防御、疲惫、或需要一点时间缓
@@ -624,7 +626,7 @@ function buildRoomScriptPrompt(
     : '';
 
   const spatialHint = params.previousRoom
-    ? `\n（你们是刚从${ROOM_META[params.previousRoom].name}走过来的，动作/语言可以带一点点"穿过门/换个空间"的自然过渡，但不要生硬报幕。）`
+    ? `\n（你们是刚从${roomDisplayName(params.previousRoom, params.userName)}走过来的，动作/语言可以带一点点"穿过门/换个空间"的自然过渡，但不要生硬报幕。）`
     : '';
 
   return `${charContext}
@@ -633,7 +635,7 @@ function buildRoomScriptPrompt(
 
 你和用户同时进入了你的精神世界——你的内心被投影成一栋房子。你完全知道自己是谁，也知道身边这个人是谁。你们现在站在：
 
-**${roomMeta.name}** (${roomMeta.emoji}) — 对应 ${ROOM_BRAIN_MAP[params.room] || ''}
+**${roomDisplayName(params.room, params.userName)}** (${roomMeta.emoji}) — 对应 ${ROOM_BRAIN_MAP[params.room] || ''}
 **氛围**: ${ROOM_ATMOSPHERE[params.room] || ''}${reluctanceHint}${spatialHint}
 
 ${prevMoodBlock}
@@ -896,6 +898,8 @@ export async function planRoomVisit(
 
 interface EmitDiveEmotionParams {
   charProfile: CharacterProfile;
+  /** 映射的用户名（用于 user_room 显示「{用户名}的房」） */
+  userName?: string;
   /** 本次潜行实际发生的对话（角色台词 + 用户回应）— 用作情绪推导依据 */
   diveDialogues: DiveDialogue[];
   /** 累积的潜行 buff（共情/信任/洞察/羁绊），辅助理解用户做了什么 */
@@ -924,7 +928,7 @@ function buildDiveEmotionPrompt(p: EmitDiveEmotionParams): string {
     .filter(([, v]) => (v as number) > 0)
     .map(([k, v]) => `${k}+${(v as number).toFixed(1)}`).join(', ') || '无';
 
-  const rooms = p.visitedRooms.map(r => ROOM_META[r]?.name || r).join(' → ');
+  const rooms = p.visitedRooms.map(r => roomDisplayName(r, p.userName) || r).join(' → ');
 
   return `你是一个角色情绪底色分析系统。
 

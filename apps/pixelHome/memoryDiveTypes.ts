@@ -105,6 +105,8 @@ export interface DiveSession {
 export interface DiveLLMRequest {
   charId: string;
   charName: string;
+  /** 映射的用户名（用于 user_room 显示「{用户名}的房」） */
+  userName?: string;
   room: MemoryRoom;
   slotId?: string;
   slotName?: string;

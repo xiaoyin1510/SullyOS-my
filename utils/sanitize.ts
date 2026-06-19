@@ -131,7 +131,7 @@ const replaceTranslationForBanner = (t: string): string =>
 
 /** `<语音>...</语音>` → 内部文字 (banner 用; segment 路径里有 sentinel 保护跳过这条) */
 const replaceVoiceForBanner = (t: string): string =>
-  t.replace(/<(语音|語音)>([\s\S]*?)<\/\1>/g, (_m, _tag, inner) => (inner || '').trim());
+  t.replace(/<(语音|語音)[^>]*>([\s\S]*?)<\/\1>/g, (_m, _tag, inner) => (inner || '').trim());
 
 /**
  * 翻译块只保留原文.
@@ -308,7 +308,7 @@ export function sanitizeIntoSegments(text: string): Segment[] {
         preview: (_raw: string, match: RegExpMatchArray) => (match[1] || '').trim() || '[翻译]',
       },
       {
-        pattern: /<(语音|語音)>([\s\S]*?)<\/\1>/,
+        pattern: /<(语音|語音)[^>]*>([\s\S]*?)<\/\1>/,
         preview: (_raw: string, match: RegExpMatchArray) => (match[2] || '').trim() || '[语音]',
       },
     ],

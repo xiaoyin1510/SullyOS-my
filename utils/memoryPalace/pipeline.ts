@@ -939,13 +939,20 @@ export async function injectMemoryPalace(
     try {
         const msgs = recentMessages ?? await DB.getMessagesByCharId(char.id);
         const currentMood = char.activeBuffs?.[0]?.name;
+        // 调用方没显式传 userName 时，兜底从全局用户档案取，保证各入口
+        // （群聊/通话/事件/学习等）召回的房间名都统一显示「{用户名}的房间」，
+        // 而不是回退成「用户房间」。
+        let resolvedUserName = userName;
+        if (!resolvedUserName) {
+            try { resolvedUserName = (await DB.getUserProfile())?.name || undefined; } catch {}
+        }
         const context = await retrieveMemories(
             msgs, char.id, embeddingConfig,
             currentMood,
             (char.personalityStyle as PersonalityStyle) || 'emotional',
             char.ruminationTendency ?? 0.3,
             queryHint,
-            userName,
+            resolvedUserName,
             getRemoteVectorConfig(),
         );
         if (context) {

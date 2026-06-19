@@ -2354,7 +2354,7 @@ var replaceSendEmoji = (t) => t.replace(/\[\[SEND_EMOJI:\s*(.+?)\]\]/g, "[\u8868
 var replaceEmojiReverseTag = (t) => t.replace(/\[(?:你|User|用户|System|[\w一-龥]+)\s*发送了表情包[:：]\s*(.*?)\]/g, "[\u8868\u60C5\uFF1A$1]");
 var replaceHtmlBlocks = (t) => t.replace(/\[html\][\s\S]*?\[\/html\]/gi, "[HTML \u5361\u7247]");
 var replaceTranslationForBanner = (t) => t.replace(/<翻译>\s*<原文>([\s\S]*?)<\/原文>\s*<译文>[\s\S]*?<\/译文>\s*<\/翻译>/g, "$1").replace(/<译文>[\s\S]*?<\/译文>/g, "").replace(/<\/?(?:翻译|原文)>/g, "");
-var replaceVoiceForBanner = (t) => t.replace(/<(语音|語音)>([\s\S]*?)<\/\1>/g, (_m, _tag, inner) => (inner || "").trim());
+var replaceVoiceForBanner = (t) => t.replace(/<(语音|語音)[^>]*>([\s\S]*?)<\/\1>/g, (_m, _tag, inner) => (inner || "").trim());
 var extractTranslationOriginal = (t) => {
   let result = t.replace(
     /<翻译>\s*<原文>([\s\S]*?)<\/原文>\s*<译文>[\s\S]*?<\/译文>\s*<\/翻译>/g,
@@ -2405,7 +2405,7 @@ function sanitizeIntoSegments(text) {
         preview: (_raw, match) => (match[1] || "").trim() || "[\u7FFB\u8BD1]"
       },
       {
-        pattern: /<(语音|語音)>([\s\S]*?)<\/\1>/,
+        pattern: /<(语音|語音)[^>]*>([\s\S]*?)<\/\1>/,
         preview: (_raw, match) => (match[2] || "").trim() || "[\u8BED\u97F3]"
       }
     ]
